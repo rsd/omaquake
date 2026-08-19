@@ -66,6 +66,12 @@ static int build_canvas(const oq_present_config *cfg)
     chafa_canvas_config_set_symbol_map(cc, map);
     /* Error diffusion crawls and shimmers on moving imagery; it only earns
      * its cost in the low-colour modes. */
+    /* Collapse redundant SGR runs. At full screen the escape sequences, not
+     * the conversion, are what saturate the terminal. */
+    chafa_canvas_config_set_optimizations(cc, CHAFA_OPTIMIZATION_ALL);
+    /* Default 0.5 spends real time searching for the best glyph per cell.
+     * At 72 Hz over a big canvas that time is better spent on frames. */
+    chafa_canvas_config_set_work_factor(cc, 0.15f);
     chafa_canvas_config_set_dither_mode(cc,
         cfg->color == OQ_COLOR_TRUE ? CHAFA_DITHER_MODE_NONE
                                     : CHAFA_DITHER_MODE_ORDERED);
@@ -122,7 +128,7 @@ static void chafa_be_frame(const uint8_t *src, int w, int h, int stride)
                        gs->str[gs->len - 1] == '\r'))
         g_string_truncate(gs, gs->len - 1);
 
-    oq_term_present(gs->str, gs->len);
+    oq_term_present_at(gs->str, gs->len, conf.origin_row, conf.origin_col);
     g_string_free(gs, TRUE);
 }
 

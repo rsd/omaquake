@@ -35,6 +35,10 @@ typedef struct {
      * 1:2, so without this Quake's 4:3 picture comes out squashed. */
     int        cell_w;
     int        cell_h;
+    /* Where the canvas sits on screen, 1-based. A canvas capped below the
+     * terminal size is centred rather than parked in the corner. */
+    int        origin_col;
+    int        origin_row;
 } oq_present_config;
 
 typedef struct oq_present_backend {

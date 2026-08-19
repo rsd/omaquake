@@ -1,6 +1,7 @@
 /* OmaQuake -- Quake rendered as characters in a terminal. */
 #include "oq_input.h"
 #include "oq_present.h"
+#include "oq_render.h"
 #include "oq_retro.h"
 #include "oq_term.h"
 
@@ -27,6 +28,8 @@ static void usage(const char *argv0)
         "  --frames=N       stop after N frames (demo/benchmark)\n"
         "  --cell=WxH       character cell pixel size (default 10x20)\n"
         "  --res=WxH        engine render resolution (default 320x200)\n"
+        "  --fps=N          presentation rate cap, 0 = every frame (default 30)\n"
+        "  --cells=WxH      cap the canvas; 0x0 fills the terminal\n"
         "  --log=PATH       write the engine log here (never to stdout)\n"
         "  --no-sound       do not open the audio device\n"
         "  --help\n",
@@ -146,7 +149,58 @@ static int run_keytest(void)
 struct sink_ctx {
     const oq_present_backend *be;
     oq_present_config *cfg;
+    int      cap_cols, cap_rows;   /* 0 = fill the terminal */
+    int64_t  period_ns;            /* minimum gap between presents */
+    int64_t  next_present;
 };
+
+/* Work out the canvas size and where to put it.
+ *
+ * Filling a large terminal from a 320x200 source is pure waste: with
+ * sub-cell glyphs one cell already resolves 2x4 pixels, so beyond
+ * res_w/2 by res_h/4 cells chafa is upscaling detail that does not
+ * exist -- at several times the conversion cost and, worse, several
+ * times the escape-sequence volume the terminal has to parse. */
+static void fit_canvas(struct sink_ctx *ctx, int term_cols, int term_rows)
+{
+    oq_present_config *cfg = ctx->cfg;
+    int cols = term_cols, rows = term_rows;
+
+    if (ctx->cap_cols > 0 && cols > ctx->cap_cols)
+        cols = ctx->cap_cols;
+    if (ctx->cap_rows > 0 && rows > ctx->cap_rows)
+        rows = ctx->cap_rows;
+
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+
+    cfg->cols = cols;
+    cfg->rows = rows;
+    cfg->origin_col = 1 + (term_cols - cols) / 2;
+    cfg->origin_row = 1 + (term_rows - rows) / 2;
+}
+
+static int64_t now_ns(void);
+
+/* Presenting is far more expensive than simulating. Throttling presentation
+ * rather than the whole loop keeps retro_run at the engine's own rate, which
+ * is what the audio stream is generated from -- pace the loop instead and the
+ * core produces fewer samples per second than the sound card consumes, and
+ * the sound breaks up. */
+static int want_frame(void *ud)
+{
+    struct sink_ctx *ctx = ud;
+    int64_t now = now_ns();
+
+    if (!ctx->period_ns)
+        return 1;
+    if (now < ctx->next_present)
+        return 0;
+    ctx->next_present = (now > ctx->next_present + ctx->period_ns)
+                        ? now + ctx->period_ns
+                        : ctx->next_present + ctx->period_ns;
+    return 1;
+}
 
 static void video_sink(const uint8_t *rgb, int w, int h, int stride, void *ud)
 {
@@ -154,11 +208,12 @@ static void video_sink(const uint8_t *rgb, int w, int h, int stride, void *ud)
     int cols, rows;
 
     if (oq_term_size(&cols, &rows)) {
-        ctx->cfg->cols = cols;
-        ctx->cfg->rows = rows;
-        ctx->be->resize(ctx->cfg);
+        fit_canvas(ctx, cols, rows);
+        /* The clear happens on the render thread: two threads writing to the
+         * same fd can interleave mid escape-sequence and corrupt the frame. */
+        oq_render_reconfigure(ctx->cfg);
     }
-    ctx->be->frame(rgb, w, h, stride);
+    oq_render_submit(rgb, w, h, stride);
 }
 
 static void key_sink(unsigned keycode, int down, uint16_t mods, void *ud)
@@ -177,12 +232,46 @@ static int64_t now_ns(void)
 
 static int run_game(const oq_present_backend *be, oq_present_config *cfg,
                     const char *pak, const char *res, const char *logpath,
-                    int nframes, int sound)
+                    int nframes, int sound, int fps, int cap_cols, int cap_rows)
 {
-    struct sink_ctx ctx = { be, cfg };
+    struct sink_ctx ctx;
     oq_retro_config rc;
+    int rw = 0, rh = 0;
     int64_t period, next;
     int frame = 0;
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.be = be;
+    ctx.cfg = cfg;
+    ctx.period_ns = fps > 0 ? (int64_t)(1000000000.0 / fps) : 0;
+
+    /* Default the cap to the source's own detail limit: one cell resolves
+     * 2x4 pixels with sub-cell glyphs. */
+    if (cap_cols < 0 || cap_rows < 0) {
+        if (sscanf(res, "%dx%d", &rw, &rh) == 2 && rw > 0 && rh > 0) {
+            cap_cols = rw / 2;
+            cap_rows = rh / 4;
+        } else {
+            cap_cols = cap_rows = 0;
+        }
+    }
+    ctx.cap_cols = cap_cols;
+    ctx.cap_rows = cap_rows;
+
+    {
+        int tc, tr;
+
+        oq_term_size(&tc, &tr);
+        fit_canvas(&ctx, tc, tr);
+        oq_term_clear();
+        be->resize(cfg);
+    }
+
+    if (oq_render_start(be, cfg)) {
+        oq_term_shutdown();
+        fprintf(stderr, "omaquake: could not start the render thread\n");
+        return 1;
+    }
 
     memset(&rc, 0, sizeof(rc));
     rc.resolution = res;
@@ -191,6 +280,8 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     rc.save_dir = ".";
     rc.log_path = logpath;
     rc.sound = sound;
+    rc.sound = sound;
+    rc.want_frame = want_frame;
     rc.sink = video_sink;
     rc.sink_ud = &ctx;
 
@@ -225,6 +316,7 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
         next += period;
     }
 
+    oq_render_stop();
     oq_retro_shutdown();
     return 0;
 }
@@ -238,6 +330,7 @@ int main(int argc, char **argv)
     const oq_present_backend *be;
     oq_present_config cfg;
     int demo = 0, keytest = 0, nframes = 0, sound = 1, i, rc;
+    int fps = 30, cap_cols = -1, cap_rows = -1;
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
@@ -257,6 +350,13 @@ int main(int argc, char **argv)
             }
         } else if (!strncmp(a, "--color=", 8)) {
             if (parse_color(a + 8, &cfg.color)) {
+                usage(argv[0]);
+                return 2;
+            }
+        } else if (!strncmp(a, "--fps=", 6)) {
+            fps = atoi(a + 6);
+        } else if (!strncmp(a, "--cells=", 8)) {
+            if (sscanf(a + 8, "%dx%d", &cap_cols, &cap_rows) != 2) {
                 usage(argv[0]);
                 return 2;
             }
@@ -319,7 +419,8 @@ int main(int argc, char **argv)
     if (demo) {
         rc = run_demo(be, &cfg, nframes ? nframes : 600);
     } else {
-        rc = run_game(be, &cfg, game, res, logpath, nframes, sound);
+        rc = run_game(be, &cfg, game, res, logpath, nframes, sound,
+                      fps, cap_cols, cap_rows);
     }
 
     be->shutdown();

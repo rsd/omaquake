@@ -14,6 +14,10 @@ typedef struct {
     const char   *save_dir;
     const char   *log_path;     /* core log destination, or NULL to discard */
     int           sound;        /* 0 disables audio output entirely */
+    /* Asked before a frame is expanded to RGB. Returning 0 skips the
+     * conversion entirely -- there is no point paying for 64k pixels of
+     * colour expansion on a frame the presenter is going to drop. */
+    int         (*want_frame)(void *ud);
     oq_video_sink sink;
     void         *sink_ud;
 } oq_retro_config;

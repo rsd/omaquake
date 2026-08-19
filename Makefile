@@ -14,7 +14,7 @@ TYRQUAKE    := third_party/tyrquake
 TYRQUAKE_A  := $(TYRQUAKE)/tyrquake_libretro_unix.a
 
 SRC         := src/oq_main.c src/oq_present.c src/oq_term.c \
-               src/oq_input.c src/oq_retro.c src/oq_audio.c
+               src/oq_input.c src/oq_retro.c src/oq_render.c src/oq_audio.c
 
 # With STATIC_LINKING=1 the core deliberately drops libretro-common (see
 # tyrquake/Makefile.common:119) and expects the frontend to provide it.
@@ -33,7 +33,8 @@ LRC_OBJ     := $(LRC_SRC:$(LRC)/%.c=$(BUILD)/lrc/%.o)
 CFLAGS      ?= -O2 -g
 CFLAGS      += -Wall -Wextra -std=gnu99
 CPPFLAGS    += -I$(TYRQUAKE)/libretro-common/include
-LDLIBS      += -lm
+LDLIBS      += -lm -pthread
+CFLAGS      += -pthread
 
 # Backends are optional: build whichever libraries are present.
 HAVE_CHAFA  := $(shell $(PKG_CONFIG) --exists chafa && echo 1)

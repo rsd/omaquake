@@ -17,6 +17,15 @@ void oq_term_shutdown(void);
  * wraps, and scrolls the screen like a mistuned CRT. */
 void oq_term_present(const char *s, size_t len);
 
+/* As above, but places the first row at (row, col), 1-based, and positions
+ * every subsequent row explicitly. Used when the canvas is smaller than the
+ * terminal. */
+void oq_term_present_at(const char *s, size_t len, int row, int col);
+
+/* Clear the screen; call when the canvas geometry changes so no stale cells
+ * survive around a newly shrunk canvas. */
+void oq_term_clear(void);
+
 /* Current size in cells.  Returns 1 if it changed since the last call. */
 int  oq_term_size(int *cols, int *rows);
 

@@ -138,6 +138,8 @@ static void RETRO_CALLCONV video_refresh(const void *data, unsigned width,
     /* A NULL frame means "same as last time" (we advertised CAN_DUPE). */
     if (!data || !conf.sink)
         return;
+    if (conf.want_frame && !conf.want_frame(conf.sink_ud))
+        return;
 
     ensure_rgb((size_t)width * height * 3);
     if (!rgb_buf)
@@ -235,6 +237,9 @@ int oq_retro_init(const oq_retro_config *cfg, const char *pak_path)
     retro_get_system_av_info(&av);
     if (av.timing.fps > 1.0)
         core_fps = av.timing.fps;
+    if (logfp)
+        fprintf(logfp, "core: %.2f fps, %.0f Hz audio\n",
+                av.timing.fps, av.timing.sample_rate);
 
     /* The core decides the rate (tyrquake_sound_samplerate), so the device
      * can only be opened once av_info is in.  Losing sound is not fatal --

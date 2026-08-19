@@ -118,7 +118,7 @@ static void caca_frame(const uint8_t *src, int w, int h, int stride)
     while (len && (out[len - 1] == '\n' || out[len - 1] == '\r'))
         len--;
 
-    oq_term_present(out, len);
+    oq_term_present_at(out, len, conf.origin_row, conf.origin_col);
     free(out);
 }
 

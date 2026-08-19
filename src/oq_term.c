@@ -58,6 +58,44 @@ static void write_all(const char *s)
     write_all_n(s, strlen(s));
 }
 
+void oq_term_clear(void)
+{
+    write_all("\033[2J");
+}
+
+void oq_term_present_at(const char *s, size_t len, int row, int col)
+{
+    static char *out;
+    static size_t cap;
+    size_t need = len * 2 + 64 + (size_t)len / 8 * 16;
+    size_t i, o = 0;
+    int line = row;
+
+    if (col <= 1 && row <= 1) {
+        oq_term_present(s, len);
+        return;
+    }
+    if (cap < need) {
+        char *p = realloc(out, need);
+
+        if (!p)
+            return;
+        out = p;
+        cap = need;
+    }
+
+    o += (size_t)snprintf(out + o, cap - o, "\033[%d;%dH", line, col);
+    for (i = 0; i < len; i++) {
+        if (s[i] == '\n') {
+            line++;
+            o += (size_t)snprintf(out + o, cap - o, "\033[%d;%dH", line, col);
+            continue;
+        }
+        out[o++] = s[i];
+    }
+    write_all_n(out, o);
+}
+
 void oq_term_present(const char *s, size_t len)
 {
     static char *out;
