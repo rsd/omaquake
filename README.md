@@ -1,5 +1,7 @@
 # OmaQuake
 
+*Oh Mah Quake! for Opinionated Linux*
+
 Quake 1 rendered as **characters** in a terminal — not as images.
 
 Every frame is converted into glyphs and ANSI colour codes, so the picture on
