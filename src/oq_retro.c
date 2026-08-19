@@ -7,6 +7,8 @@
  */
 #include "oq_retro.h"
 
+#include "oq_audio.h"
+
 #include <libretro.h>
 
 #include <stdarg.h>
@@ -19,6 +21,7 @@ static retro_keyboard_event_t kbd_cb;
 static uint8_t *rgb_buf;
 static size_t rgb_cap;
 static double core_fps = 60.0;
+static int audio_on;
 static FILE *logfp;
 
 /* Anything the core prints must not reach stdout -- stdout is the picture.
@@ -162,17 +165,27 @@ static void RETRO_CALLCONV video_refresh(const void *data, unsigned width,
     conf.sink(rgb_buf, (int)width, (int)height, (int)width * 3, conf.sink_ud);
 }
 
-/* Audio is accepted and dropped for now; the core needs the callbacks to
- * exist and needs its buffers drained. */
+/* tyrquake uses the batch callback, but the single-sample one has to work
+ * too: the core is free to mix the two and a missing sink means silence. */
 static void RETRO_CALLCONV audio_sample(int16_t l, int16_t r)
 {
-    (void)l; (void)r;
+    int16_t frame[2];
+
+    if (!audio_on)
+        return;
+    frame[0] = l;
+    frame[1] = r;
+    oq_audio_write(frame, 1);
 }
 
+/* Signed 16-bit stereo interleaved, so "frames" is half the sample count.
+ * We always claim to have consumed all of them -- the core has no useful
+ * response to a short write and we never block to make one true. */
 static size_t RETRO_CALLCONV audio_sample_batch(const int16_t *data,
                                                 size_t frames)
 {
-    (void)data;
+    if (audio_on)
+        oq_audio_write(data, frames);
     return frames;
 }
 
@@ -223,6 +236,18 @@ int oq_retro_init(const oq_retro_config *cfg, const char *pak_path)
     if (av.timing.fps > 1.0)
         core_fps = av.timing.fps;
 
+    /* The core decides the rate (tyrquake_sound_samplerate), so the device
+     * can only be opened once av_info is in.  Losing sound is not fatal --
+     * a machine with no card still gets to play. */
+    if (conf.sound) {
+        if (oq_audio_init((int)av.timing.sample_rate) == 0) {
+            audio_on = 1;
+        } else if (logfp) {
+            fprintf(logfp, "audio: disabled (%s)\n", oq_audio_error());
+            fflush(logfp);
+        }
+    }
+
     return 0;
 }
 
@@ -246,6 +271,12 @@ void oq_retro_shutdown(void)
 {
     retro_unload_game();
     retro_deinit();
+    if (audio_on) {
+        if (logfp)
+            fprintf(logfp, "audio: %lu frames dropped\n", oq_audio_dropped());
+        oq_audio_shutdown();
+        audio_on = 0;
+    }
     free(rgb_buf);
     rgb_buf = NULL;
     rgb_cap = 0;

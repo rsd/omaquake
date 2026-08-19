@@ -13,6 +13,7 @@ typedef struct {
     const char   *samplerate;   /* "auto" or a rate in Hz */
     const char   *save_dir;
     const char   *log_path;     /* core log destination, or NULL to discard */
+    int           sound;        /* 0 disables audio output entirely */
     oq_video_sink sink;
     void         *sink_ud;
 } oq_retro_config;
