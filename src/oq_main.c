@@ -22,6 +22,7 @@ static void usage(const char *argv0)
         "  --color=DEPTH    mono | 16 | 256 | true      (default: true)\n"
         "  --demo           render a test pattern instead of the game\n"
         "  --frames=N       stop after N frames (demo/benchmark)\n"
+        "  --cell=WxH       character cell pixel size (default 10x20)\n"
         "  --help\n",
         argv0, oq_present_available());
 }
@@ -106,6 +107,9 @@ int main(int argc, char **argv)
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
+    /* Typical terminal cell proportions; --cell= overrides. */
+    cfg.cell_w = 10;
+    cfg.cell_h = 20;
 
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -119,6 +123,11 @@ int main(int argc, char **argv)
             }
         } else if (!strncmp(a, "--color=", 8)) {
             if (parse_color(a + 8, &cfg.color)) {
+                usage(argv[0]);
+                return 2;
+            }
+        } else if (!strncmp(a, "--cell=", 7)) {
+            if (sscanf(a + 7, "%dx%d", &cfg.cell_w, &cfg.cell_h) != 2) {
                 usage(argv[0]);
                 return 2;
             }

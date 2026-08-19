@@ -36,7 +36,13 @@ endif
 
 OBJ         := $(SRC:src/%.c=$(BUILD)/%.o)
 
+# Which backends are available changes CPPFLAGS, and make does not track
+# flag changes -- without this stamp a newly installed backend leaves stale
+# objects behind and the binary silently lacks it.
+FLAGS_STAMP := $(BUILD)/.flags
+
 .PHONY: all clean engine install backends
+.DELETE_ON_ERROR:
 all: $(BIN)
 
 backends:
@@ -46,8 +52,13 @@ backends:
 $(BIN): $(OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-$(BUILD)/%.o: src/%.c | $(BUILD)
+$(BUILD)/%.o: src/%.c $(FLAGS_STAMP) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(FLAGS_STAMP): | $(BUILD)
+	@echo '$(CC) $(CFLAGS) $(CPPFLAGS) $(LDLIBS)' > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
 
 $(BUILD):
 	@mkdir -p $(BUILD)

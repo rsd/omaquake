@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 
+extern char **environ;
+
 static ChafaCanvas *canvas;
 static ChafaTermInfo *term_info;
 static oq_present_config conf;
@@ -23,13 +25,10 @@ static ChafaSymbolTags tags_for(oq_symbols s)
         return CHAFA_SYMBOL_TAG_BLOCK | CHAFA_SYMBOL_TAG_SPACE;
     case OQ_SYMBOLS_FINE:
         /* Sub-cell glyphs: 2x4 effective resolution per character cell.
-         * Octants need chafa 1.16; older builds stop at sextants. */
-        return CHAFA_SYMBOL_TAG_BLOCK | CHAFA_SYMBOL_TAG_SPACE
-             | CHAFA_SYMBOL_TAG_HALF | CHAFA_SYMBOL_TAG_QUAD
-#if CHAFA_CHECK_VERSION(1, 16, 0)
-             | CHAFA_SYMBOL_TAG_OCTANT
-#endif
-             | CHAFA_SYMBOL_TAG_SEXTANT;
+         * These are still real characters, they just read as pixels. */
+        return CHAFA_SYMBOL_TAG_BLOCK  | CHAFA_SYMBOL_TAG_SPACE
+             | CHAFA_SYMBOL_TAG_HALF   | CHAFA_SYMBOL_TAG_QUAD
+             | CHAFA_SYMBOL_TAG_SEXTANT | CHAFA_SYMBOL_TAG_OCTANT;
     }
     return CHAFA_SYMBOL_TAG_ASCII;
 }
@@ -60,13 +59,15 @@ static int build_canvas(const oq_present_config *cfg)
 
     cc = chafa_canvas_config_new();
     chafa_canvas_config_set_geometry(cc, cfg->cols, cfg->rows);
+    chafa_canvas_config_set_cell_geometry(cc, cfg->cell_w, cfg->cell_h);
     chafa_canvas_config_set_canvas_mode(cc, mode_for(cfg->color));
     chafa_canvas_config_set_pixel_mode(cc, CHAFA_PIXEL_MODE_SYMBOLS);
     chafa_canvas_config_set_symbol_map(cc, map);
-    /* The frame is already the right aspect for the cell grid; stretching
-     * keeps the engine's own 4:3 handling authoritative. */
-    chafa_canvas_config_set_horiz_align(cc, CHAFA_ALIGN_CENTER);
-    chafa_canvas_config_set_vert_align(cc, CHAFA_ALIGN_CENTER);
+    /* Error diffusion crawls and shimmers on moving imagery; it only earns
+     * its cost in the low-colour modes. */
+    chafa_canvas_config_set_dither_mode(cc,
+        cfg->color == OQ_COLOR_TRUE ? CHAFA_DITHER_MODE_NONE
+                                    : CHAFA_DITHER_MODE_ORDERED);
 
     canvas = chafa_canvas_new(cc);
 
@@ -80,7 +81,7 @@ static int chafa_be_init(const oq_present_config *cfg)
 {
     ChafaTermDb *db = chafa_term_db_get_default();
 
-    term_info = chafa_term_db_detect(db, (gchar **)environ);
+    term_info = chafa_term_db_detect(db, environ);
     return build_canvas(cfg);
 }
 
@@ -114,8 +115,8 @@ static void chafa_be_frame(const uint8_t *src, int w, int h, int stride)
     if (!gs)
         return;
 
-    /* Same reason as the caca backend: a trailing newline on the bottom row
-     * scrolls the terminal. */
+    /* A trailing newline on the bottom row scrolls the terminal and the
+     * image walks upward one line per frame. */
     while (gs->len && (gs->str[gs->len - 1] == '\n' ||
                        gs->str[gs->len - 1] == '\r'))
         g_string_truncate(gs, gs->len - 1);

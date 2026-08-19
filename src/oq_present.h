@@ -31,6 +31,10 @@ typedef struct {
     oq_color   color;
     int        cols;      /* terminal size in cells, updated on resize */
     int        rows;
+    /* Pixel dimensions of one character cell.  Terminal cells are roughly
+     * 1:2, so without this Quake's 4:3 picture comes out squashed. */
+    int        cell_w;
+    int        cell_h;
 } oq_present_config;
 
 typedef struct oq_present_backend {
