@@ -85,12 +85,21 @@ Working prototype, verified end to end: clicking the bar icon opens a popout
 showing Quake running from `id1/pak0.pak`, and closing it tears down both the
 terminal and the chrome surface with no strays left behind.
 
+Closing on focus loss is implemented and verified: the popout arms itself only
+once the terminal has actually taken focus, then tears down terminal and chrome
+together as soon as focus leaves. Arming matters — between `open()` and foot
+mapping its window the active toplevel is still whatever the user was in, and
+an unarmed check slams the popout shut instantly. A 5s watchdog closes the
+popout if the terminal never appears at all, so a bad `binary` path cannot
+strand a chrome ring over an empty hole.
+
 Known gaps:
 
 - Input pass-through through the `mask` is designed but **not yet verified**
   end to end; the compositing half is confirmed by screenshot.
-- No close-on-focus-loss, so the popout stays up until the icon is clicked
-  again or another popout evicts it.
+- The popout does not take focus when opened over IPC onto a monitor that is
+  not the focused one, so it stays open until something else is focused. Opening
+  by clicking the bar icon does not have this problem.
 - Does not draw its own `PopupCard`, because `PopupCard` paints a background
   behind its content and would fill the hole. The chrome here is hand-rolled,
   so it tracks the theme only through `Color.popups.*`.

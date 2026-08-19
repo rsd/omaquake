@@ -210,9 +210,46 @@ Panel {
         reap.running = true
     }
 
+    // --- close on focus loss -------------------------------------------
+    // Arm only once the terminal has actually taken focus. Between open() and
+    // foot mapping its window the active toplevel is still whatever the user
+    // was in, so an unarmed check would slam the popout shut immediately.
+    //
+    // This also covers quitting Quake: when foot exits, focus moves to some
+    // other toplevel and the same path tears the chrome down.
+    property bool armed: false
+
+    readonly property string activeAppId: {
+        var t = ToplevelManager.activeToplevel
+        return t ? String(t.appId || "") : ""
+    }
+
+    onActiveAppIdChanged: {
+        if (!opened) return
+        if (activeAppId === root.appId) {
+            root.armed = true
+            return
+        }
+        if (root.armed) root.close()
+    }
+
+    // If the terminal never appears at all -- wrong binary path, foot not
+    // installed -- do not leave a chrome ring floating over an empty hole.
+    Timer {
+        id: spawnWatchdog
+        interval: 5000
+        onTriggered: if (root.opened && !root.armed) root.close()
+    }
+
     onOpenedChanged: {
-        if (opened) Qt.callLater(launchTerminal)
-        else killTerminal()
+        armed = false
+        if (opened) {
+            Qt.callLater(launchTerminal)
+            spawnWatchdog.restart()
+        } else {
+            spawnWatchdog.stop()
+            killTerminal()
+        }
     }
 
     // A stranded terminal outlives a shell restart: it is floating, pinned and
