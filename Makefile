@@ -13,7 +13,23 @@ BIN         := $(BUILD)/omaquake
 TYRQUAKE    := third_party/tyrquake
 TYRQUAKE_A  := $(TYRQUAKE)/tyrquake_libretro_unix.a
 
-SRC         := src/oq_main.c src/oq_present.c src/oq_term.c
+SRC         := src/oq_main.c src/oq_present.c src/oq_term.c \
+               src/oq_input.c src/oq_retro.c
+
+# With STATIC_LINKING=1 the core deliberately drops libretro-common (see
+# tyrquake/Makefile.common:119) and expects the frontend to provide it.
+LRC         := $(TYRQUAKE)/libretro-common
+LRC_SRC     := \
+  $(LRC)/file/retro_dirent.c $(LRC)/encodings/encoding_utf.c \
+  $(LRC)/string/stdstring.c $(LRC)/streams/file_stream.c \
+  $(LRC)/streams/file_stream_transforms.c $(LRC)/vfs/vfs_implementation.c \
+  $(LRC)/file/file_path.c $(LRC)/file/file_path_io.c \
+  $(LRC)/features/features_cpu.c $(LRC)/compat/fopen_utf8.c \
+  $(LRC)/compat/compat_strl.c $(LRC)/compat/compat_posix_string.c \
+  $(LRC)/compat/compat_strcasestr.c $(LRC)/compat/compat_snprintf.c \
+  $(LRC)/time/rtime.c \
+  $(LRC)/net/net_compat.c $(LRC)/net/net_socket.c
+LRC_OBJ     := $(LRC_SRC:$(LRC)/%.c=$(BUILD)/lrc/%.o)
 CFLAGS      ?= -O2 -g
 CFLAGS      += -Wall -Wextra -std=gnu99
 CPPFLAGS    += -I$(TYRQUAKE)/libretro-common/include
@@ -34,7 +50,7 @@ ifeq ($(HAVE_CACA),1)
   LDLIBS   += $(shell $(PKG_CONFIG) --libs caca)
 endif
 
-OBJ         := $(SRC:src/%.c=$(BUILD)/%.o)
+OBJ         := $(SRC:src/%.c=$(BUILD)/%.o) $(LRC_OBJ)
 
 # Which backends are available changes CPPFLAGS, and make does not track
 # flag changes -- without this stamp a newly installed backend leaves stale
@@ -49,11 +65,17 @@ backends:
 	@echo "chafa: $(if $(HAVE_CHAFA),yes,NO - install 'chafa')"
 	@echo "caca:  $(if $(HAVE_CACA),yes,NO - install 'libcaca')"
 
-$(BIN): $(OBJ) | $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
+$(BIN): $(OBJ) $(TYRQUAKE_A) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $(OBJ) $(TYRQUAKE_A) $(LDLIBS)
 
 $(BUILD)/%.o: src/%.c $(FLAGS_STAMP) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+# libretro-common is third-party: build it quietly rather than drowning our
+# own warnings in it.
+$(BUILD)/lrc/%.o: $(LRC)/%.c | $(BUILD)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -w -I$(LRC)/include -c -o $@ $<
 
 $(FLAGS_STAMP): | $(BUILD)
 	@echo '$(CC) $(CFLAGS) $(CPPFLAGS) $(LDLIBS)' > $@.tmp

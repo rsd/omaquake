@@ -43,19 +43,44 @@ order R,G,B the word is `B<<16 | G<<8 | R`. The red and blue masks passed to
 The `--demo` test pattern includes saturated primaries in a known order
 specifically so this class of mistake is visible at a glance.
 
+## Host loop
+
+`src/oq_retro.c` answers the core's environment queries, takes RGB565 off
+`video_refresh`, expands to RGB888 and hands it to the presentation backend.
+
+Two things that bite:
+
+- **`STATIC_LINKING=1` drops libretro-common.** `Makefile.common:119` excludes
+  `file_path.c`, `compat_strl.c`, `vfs_implementation.c` and friends when
+  building the archive, on the assumption the frontend already has them. Our
+  Makefile compiles that exact list into the binary. Networking
+  (`net_compat.c`, `net_socket.c`) is excluded the same way a few lines down.
+- **Core logs must never reach stdout.** stdout is the picture; one log line
+  shreds the frame. `RETRO_ENVIRONMENT_GET_LOG_INTERFACE` is answered with a
+  callback that writes to `--log=PATH` or discards.
+
+`tyrquake_compute_rendering` is forced to `disabled` so the software
+rasterizer stays the active backend rather than the Vulkan compute path.
+
+## Input
+
+`src/oq_input.c` parses kitty `CSI key ; mods : event u` sequences, where the
+event type is a *sub-parameter* of the modifier field (1 press, 2 repeat,
+3 release). Repeats are dropped — the engine tracks its own repeat state.
+Keycodes map onto `RETROK_*`, which is ASCII-compatible below 127, and kitty's
+private range 57441–57449 covers the modifier keys.
+
+The legacy path synthesises a release 260 ms after the last press, relying on
+the terminal's own auto-repeat to keep a held key alive. That interval has to
+exceed the repeat period (~30 ms) or a held key stutters.
+
+Ctrl-\\ is intercepted as a quit hatch and never reaches the engine.
+
 ## Still to do
 
-1. **Host loop** — implement the libretro callbacks (`environment`,
-   `video_refresh`, `audio_sample_batch`, `input_poll`, `input_state`),
-   call `retro_load_game()` with the pak path, drive `retro_run()` at the
-   rate from `retro_get_system_av_info()`.
-2. **RGB565 → RGB888** expansion in front of the backend.
-3. **Input** — parse kitty `CSI unicode ; mods : event-type u` sequences into
-   press/release and feed the core's `retro_keyboard_callback`. Fallback path
-   for terminals without the protocol: synthesise a release after an idle
-   timeout and lean on the terminal's auto-repeat.
-4. **Audio** — libretro hands us signed 16-bit stereo; SDL2 or ALSA out, or
-   `--no-sound`.
-5. **Aspect** — Quake renders 4:3 at 320×200; terminal cells are roughly 1:2,
-   so the cell grid needs correcting or everything is squashed.
-6. **Packaging** — see `packaging/PKGBUILD`.
+1. **Audio** — the core's samples are accepted and dropped. libretro hands us
+   signed 16-bit stereo; ALSA or SDL2 out, plus a `--no-sound` switch.
+2. **Mouse look** — a terminal offers no usable relative pointer motion, so
+   turning is stuck on the arrow keys. SGR mouse reporting gives absolute cell
+   positions only, which is too coarse; warp-to-centre is not available.
+3. **Packaging** — see `packaging/PKGBUILD`.

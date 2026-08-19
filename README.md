@@ -54,7 +54,17 @@ Options:
     --video=chafa|caca     presentation backend
     --symbols=ascii|block|fine
     --color=mono|16|256|true
+    --cell=WxH             character cell pixel size (default 10x20)
+    --res=WxH              engine render resolution (default 320x200)
+    --log=PATH             engine log destination
     --frames=N
+
+Press **Ctrl-\\** to quit; the engine never sees it. Escape opens Quake's own
+menu as usual.
+
+The bigger your terminal, the more pixels you get -- but note the engine
+renders at `--res` and the picture is downsampled to the cell grid, so a
+huge terminal with `--res=320x200` just magnifies the same detail.
 
 `--symbols=ascii` restricts the glyph set to letters and punctuation for the
 classic look; `fine` allows quadrant/sextant/octant glyphs, which are still
@@ -67,11 +77,14 @@ game's `pak1.pak` requires owning Quake.
 
 ## Status
 
-Working: repo layout, build, terminal setup with keyboard negotiation,
-presentation backends, `--demo`.
+Playable. The engine boots, renders, and takes keyboard input.
 
-Not yet wired: the libretro host loop (`retro_run` → present), input
-mapping, audio. See `docs/DESIGN.md`.
+Measured at 200x50 cells, all three presentation modes hold the engine's
+72 fps pacing target, so the character conversion is not the bottleneck.
+
+Not yet done: **audio** (accepted from the core and discarded) and **mouse
+look** (a terminal gives no usable relative motion; turning is on the arrow
+keys). See `docs/DESIGN.md`.
 
 ## Licence
 

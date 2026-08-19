@@ -1,5 +1,7 @@
 /* OmaQuake -- Quake rendered as characters in a terminal. */
+#include "oq_input.h"
 #include "oq_present.h"
+#include "oq_retro.h"
 #include "oq_term.h"
 
 #include <math.h>
@@ -23,6 +25,8 @@ static void usage(const char *argv0)
         "  --demo           render a test pattern instead of the game\n"
         "  --frames=N       stop after N frames (demo/benchmark)\n"
         "  --cell=WxH       character cell pixel size (default 10x20)\n"
+        "  --res=WxH        engine render resolution (default 320x200)\n"
+        "  --log=PATH       write the engine log here (never to stdout)\n"
         "  --help\n",
         argv0, oq_present_available());
 }
@@ -97,10 +101,100 @@ static int run_demo(const oq_present_backend *be, oq_present_config *cfg,
     return 0;
 }
 
+
+/* ---- game loop ------------------------------------------------------ */
+
+struct sink_ctx {
+    const oq_present_backend *be;
+    oq_present_config *cfg;
+};
+
+static void video_sink(const uint8_t *rgb, int w, int h, int stride, void *ud)
+{
+    struct sink_ctx *ctx = ud;
+    int cols, rows;
+
+    if (oq_term_size(&cols, &rows)) {
+        ctx->cfg->cols = cols;
+        ctx->cfg->rows = rows;
+        ctx->be->resize(ctx->cfg);
+    }
+    ctx->be->frame(rgb, w, h, stride);
+}
+
+static void key_sink(unsigned keycode, int down, uint16_t mods, void *ud)
+{
+    (void)ud;
+    oq_retro_key(keycode, down, mods);
+}
+
+static int64_t now_ns(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+static int run_game(const oq_present_backend *be, oq_present_config *cfg,
+                    const char *pak, const char *res, const char *logpath,
+                    int nframes)
+{
+    struct sink_ctx ctx = { be, cfg };
+    oq_retro_config rc;
+    int64_t period, next;
+    int frame = 0;
+
+    memset(&rc, 0, sizeof(rc));
+    rc.resolution = res;
+    rc.framerate = "auto";
+    rc.samplerate = "auto";
+    rc.save_dir = ".";
+    rc.log_path = logpath;
+    rc.sink = video_sink;
+    rc.sink_ud = &ctx;
+
+    if (oq_retro_init(&rc, pak)) {
+        oq_term_shutdown();
+        fprintf(stderr, "omaquake: failed to load '%s'\n", pak);
+        return 1;
+    }
+
+    oq_input_init(oq_term_has_key_release());
+    period = (int64_t)(1000000000.0 / oq_retro_fps());
+    next = now_ns() + period;
+
+    while (!oq_term_quit_requested && !oq_input_quit()) {
+        int64_t remain;
+
+        oq_input_poll(key_sink, NULL);
+        oq_input_expire(key_sink, NULL);
+        oq_retro_run();
+
+        if (nframes && ++frame >= nframes)
+            break;
+
+        remain = next - now_ns();
+        if (remain > 0) {
+            struct timespec ts = { remain / 1000000000,
+                                   remain % 1000000000 };
+            nanosleep(&ts, NULL);
+        } else {
+            next = now_ns();   /* we fell behind; do not spiral */
+        }
+        next += period;
+    }
+
+    oq_retro_shutdown();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *video = "chafa";
     const char *game = NULL;
+    const char *res = "320x200";
+    const char *logpath = NULL;
     const oq_present_backend *be;
     oq_present_config cfg;
     int demo = 0, nframes = 600, i, rc;
@@ -126,6 +220,10 @@ int main(int argc, char **argv)
                 usage(argv[0]);
                 return 2;
             }
+        } else if (!strncmp(a, "--res=", 6)) {
+            res = a + 6;
+        } else if (!strncmp(a, "--log=", 6)) {
+            logpath = a + 6;
         } else if (!strncmp(a, "--cell=", 7)) {
             if (sscanf(a + 7, "%dx%d", &cfg.cell_w, &cfg.cell_h) != 2) {
                 usage(argv[0]);
@@ -170,10 +268,8 @@ int main(int argc, char **argv)
     if (demo) {
         rc = run_demo(be, &cfg, nframes);
     } else {
-        oq_term_shutdown();
-        fprintf(stderr, "omaquake: engine host not wired up yet -- "
-                        "try --demo to exercise the %s backend\n", video);
-        return 1;
+        rc = run_game(be, &cfg, game, res, logpath,
+                      nframes == 600 ? 0 : nframes);
     }
 
     be->shutdown();
