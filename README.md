@@ -2,90 +2,152 @@
 
 Quake 1 rendered as **characters** in a terminal — not as images.
 
-The point is text: every frame is converted into glyphs and ANSI colour, so
-the picture is real selectable characters in the terminal grid. Terminal
-graphics protocols (kitty, sixel, iTerm2) send actual bitmaps and are
-deliberately **not** used here.
+Every frame is converted into glyphs and ANSI colour codes, so the picture on
+screen is made of real, selectable characters sitting in the terminal grid.
+Terminal graphics protocols that send actual bitmaps — kitty graphics, sixel,
+iTerm2 inline images — are deliberately **not** used. That restriction is the
+whole point of the project: it has to look like Quake while staying text.
 
 ## How it works
 
 | Layer | Choice | Why |
 |---|---|---|
-| Engine | [libretro/tyrquake](https://github.com/libretro/tyrquake) | Keeps Quake's original 8-bit software rasterizer. QuakeSpasm is GL-only and would need llvmpipe/OSMesa plus a readback. |
-| Linkage | `STATIC_LINKING=1` → `tyrquake_libretro.a` | One self-contained `omaquake` binary rather than a dlopen'd core. |
-| Video out | [chafa](https://hpjansson.org/chafa/) (default), libcaca (alternative) | chafa sets glyph repertoire and colour depth *independently*, so you can have pure ASCII in 24-bit colour. libcaca is capped at 16 ANSI colours in a terminal. |
-| Input | kitty keyboard protocol, with fallback | A plain tty reports key **presses only** — see below. |
+| Engine | [libretro/tyrquake](https://github.com/libretro/tyrquake) | Keeps Quake's original 8-bit software rasterizer. QuakeSpasm is GL-only — getting CPU-side pixels out of it would mean software OpenGL (llvmpipe/OSMesa) plus a `glReadPixels` every frame. |
+| Linkage | `STATIC_LINKING=1` → `tyrquake_libretro_unix.a` | One self-contained `omaquake` binary, not a dlopen'd core. This also means the core drops libretro-common (see `Makefile.common:119` in tyrquake) and our own Makefile has to compile the frontend-support files back in — see `docs/DESIGN.md`. |
+| Video out | [chafa](https://hpjansson.org/chafa/) (default), libcaca (alternative) | chafa sets glyph repertoire and colour depth **independently**, so you can have pure ASCII rendered in 24-bit colour. libcaca in a terminal is capped at 16 ANSI colours no matter what glyphs you pick. |
+| Input | kitty keyboard protocol, with a legacy fallback | A plain tty only ever reports key **presses**, never releases — see below. |
+| Audio | ALSA (optional) | Samples come off the libretro audio callbacks; see Audio below. |
 
-The engine hands us RGB565 frames through the libretro `video_refresh`
-callback; we expand to RGB888 and hand that to a presentation backend, which
-returns a string of characters we write to stdout.
-
-## The key-release problem
-
-A normal terminal never tells you that a key was *released*. That makes
-"hold W to walk forward" impossible, and synthesising releases from a timer
-feels terrible.
-
-The [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
-solves it: flag `0b10` makes the terminal report event types, so we get
-press, repeat and release. OmaQuake probes for it at startup and reports
-what it got. Conveniently, the tyrquake core registers a libretro
-`retro_keyboard_callback`, which takes a `down` flag — so real key-up events
-map straight through to the engine.
-
-Terminals known to support it: kitty, Ghostty, foot, WezTerm.
+The engine hands over RGB565 frames through the libretro `video_refresh`
+callback; the host expands them to RGB888 and hands that to a presentation
+backend, which turns pixels into a string of characters that gets written to
+stdout on a dedicated render thread.
 
 ## Building
 
-    sudo pacman -S chafa libcaca      # either one is enough; both is better
     git submodule update --init
-    make engine                        # builds tyrquake_libretro.a
-    make
+    make engine       # builds third_party/tyrquake as a static archive
+    make               # builds ./build/omaquake
+    make backends      # reports which optional presentation/audio backends were found
 
-`make backends` reports which presentation backends were compiled in.
-
-## Running
-
-    ./build/omaquake --demo                        # test pattern, no game data
-    ./build/omaquake ~/games/quake/id1/pak0.pak    # the real thing
-
-Options:
-
-    --video=chafa|caca     presentation backend
-    --symbols=ascii|block|fine
-    --color=mono|16|256|true
-    --cell=WxH             character cell pixel size (default 10x20)
-    --res=WxH              engine render resolution (default 320x200)
-    --log=PATH             engine log destination
-    --frames=N
-
-Press **Ctrl-\\** to quit; the engine never sees it. Escape opens Quake's own
-menu as usual.
-
-The bigger your terminal, the more pixels you get -- but note the engine
-renders at `--res` and the picture is downsampled to the cell grid, so a
-huge terminal with `--res=320x200` just magnifies the same detail.
-
-`--symbols=ascii` restricts the glyph set to letters and punctuation for the
-classic look; `fine` allows quadrant/sextant/octant glyphs, which are still
-characters but give 2×4 sub-cell detail.
+Presentation and audio backends are optional and detected via `pkg-config`
+(`chafa`, `caca`, `alsa`). `make backends` tells you what actually got
+compiled into the binary — trust that output over anything below, since a
+backend can be silently absent if its `-dev`/pkg-config file is missing.
 
 ## Game data
 
-Not included. The shareware `pak0.pak` is freely redistributable; the full
-game's `pak1.pak` requires owning Quake.
+Not included. The freely redistributable shareware release ships
+`pak0.pak`, available at
+<https://ftp.gwdg.de/pub/misc/ftp.idsoftware.com/idstuff/quake/quake106.zip>
+(also mirrored at gamers.org/pub/idgames/idstuff/quake/). Inside that
+archive, `resource.1` is an LHA self-extracting executable; `bsdtar` can
+open it directly. Extract it and place `ID1/PAK0.PAK` at `id1/pak0.pak`
+relative to wherever you run `omaquake` from.
+
+The full game's `pak1.pak` requires owning Quake and is not distributed
+here.
+
+## Running
+
+    ./build/omaquake --demo                          # test pattern, no game data needed
+    ./build/omaquake id1/pak0.pak                     # the real thing
+
+Options, as reported by `--help`:
+
+    --video=NAME     presentation backend: chafa, caca (whichever were built)
+    --symbols=SET    ascii | block | fine        (default: fine)
+    --color=DEPTH    mono | 16 | 256 | true      (default: true)
+    --demo           render a test pattern instead of the game
+    --keytest        show decoded key events; diagnoses input problems
+    --frames=N       stop after N frames (demo/benchmark)
+    --cell=WxH       character cell pixel size (default 10x20)
+    --res=WxH        engine render resolution (default 320x200)
+    --fps=N          presentation rate cap, 0 = every frame (default 30)
+    --cells=WxH      cap the canvas; 0x0 fills the terminal
+    --log=PATH       write the engine log here (never to stdout)
+    --no-sound       do not open the audio device
+    --help
+
+`--symbols=ascii` restricts the glyph set to letters and punctuation for the
+classic look; `fine` (the default) allows quadrant/sextant/octant glyphs,
+which are still plain characters but resolve 2×4 sub-pixels per cell.
+
+By default the canvas is capped to `res_w/2 × res_h/4` cells (160×50 for the
+default 320×200 resolution), not the full terminal — see Performance below
+for why. Pass `--cells=0x0` to fill the terminal anyway, or `--cells=WxH` for
+an explicit cap.
+
+## Controls
+
+Quit: **Ctrl-Q**, **Ctrl-\\**, or **F10**. These are intercepted before the
+engine ever sees them, from the decoded key event rather than a raw control
+byte — under the kitty keyboard protocol Ctrl-\\ never arrives as a literal
+0x1c byte, it arrives as `CSI 92;5u`, so a raw-byte check would silently stop
+working the moment the protocol activates.
+
+Quake 1 predates the WASD convention. Stock `default.cfg` has movement and
+turning on the **arrow keys**, fire on **Ctrl**, strafe on **comma/period**,
+and — surprisingly — `a` bound to `+lookup` and `d` to `+moveup`.
+
+Copy `share/autoexec.cfg` to your `id1/` directory to get a modern layout:
+it rebinds WASD to movement, raises `cl_yawspeed` from 140 to 280 (140 is
+tuned assuming you have a mouse for fine aiming; keyboard-only turning at
+that rate is painfully slow), and — critically — rebinds `LCTRL`/`LSHIFT`/
+`LALT` rather than `CTRL`/`SHIFT`/`ALT`. This engine renumbers keys to match
+libretro's `RETROK_*` values, which renamed the modifier keys; the stock
+config's `bind CTRL +attack` (etc.) references a keyname that no longer
+exists, `Key_StringToKeynum` fails, and the bind is dropped **silently** —
+fire, run and strafe simply do nothing until you load `autoexec.cfg`.
+
+Mouse look is being implemented and is **in progress**; do not expect
+relative mouse motion to work yet.
+
+## Audio
+
+ALSA output is optional (built when `pkg-config --exists alsa` succeeds; see
+`make backends`). Disable it with `--no-sound`, or point it at ALSA's null
+sink with `OMAQUAKE_ALSA_DEVICE=null` — useful for CI or any run where you
+don't want sound coming out of the machine's speakers. `OMAQUAKE_ALSA_DEVICE`
+otherwise names any ALSA PCM device; it defaults to `default`.
+
+The audio path never blocks the frame loop: writes are non-blocking and a
+write that doesn't fit is simply dropped, because a blocking
+`snd_pcm_writei()` would stall presentation in lockstep with the sound card.
+
+## Performance
+
+Presentation runs on its own thread, separate from the engine thread. The
+engine needs roughly 16.7 ms per frame to hold its own timing target and
+saturates one core doing that alone; character conversion and writing to the
+terminal is real additional work and has to happen in parallel or the frame
+pacing degrades.
+
+The canvas is capped by default to `res_w/2 × res_h/4` cells because
+sub-cell glyphs (the `fine` symbol set) already resolve 2×4 pixels per
+character cell — filling a large terminal from a 320×200 source past that
+point doesn't add detail, it just upscales the same 320×200 picture at
+several times the conversion cost and several times the escape-sequence
+volume the terminal has to parse.
+
+Before the render thread and canvas cap existed, a 400×100 terminal ran at
+**11.8 fps**, emitting **1.1 MB of escape sequences per frame**. With both in
+place it holds roughly **61 fps**, independent of terminal size.
 
 ## Status
 
-Playable. The engine boots, renders, and takes keyboard input.
+Playable: the engine boots, renders, takes keyboard input, and (when ALSA is
+available) plays sound.
 
-Measured at 200x50 cells, all three presentation modes hold the engine's
-72 fps pacing target, so the character conversion is not the bottleneck.
+Known gaps:
 
-Not yet done: **audio** (accepted from the core and discarded) and **mouse
-look** (a terminal gives no usable relative motion; turning is on the arrow
-keys). See `docs/DESIGN.md`.
+- **Mouse look** is being worked on right now and is not complete. A
+  terminal offers no native relative pointer motion, so this needs some
+  scheme layered on top of SGR mouse reporting or similar; treat this as
+  unfinished rather than assume any particular behaviour.
+- See `docs/DESIGN.md` for the remaining to-do list and the reasoning behind
+  design choices made along the way.
 
 ## Licence
 
-GPL-2.0-only, matching the Quake engine source this builds on.
+GPL-2.0-only, inherited from the Quake engine source this builds on.
