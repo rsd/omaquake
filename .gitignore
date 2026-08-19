@@ -1,0 +1,8 @@
+build/
+*.o
+*.a
+*.so
+omaquake
+id1/
+*.pak
+compile_commands.json

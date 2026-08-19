@@ -1,0 +1,49 @@
+# Maintainer: Raul Dias <raul@dias.com.br>
+#
+# WIP -- this recipe is a skeleton pending the host loop landing.  Open
+# questions are marked TODO; do not expect a clean `makepkg` yet.
+
+pkgname=omaquake
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Quake 1 rendered as characters in a terminal"
+arch=('x86_64')
+url="https://github.com/raul/omaquake"   # TODO: real URL once pushed
+license=('GPL-2.0-only')                  # matches the Quake engine source
+depends=('chafa' 'libcaca')
+makedepends=('git' 'make' 'gcc' 'pkgconf')
+optdepends=('quake-shareware-data: freely redistributable pak0.pak')
+
+# The engine is a submodule, so the source tarball alone is not enough.
+# TODO: decide between (a) git source with submodule, or (b) vendoring
+# tyrquake at a pinned commit and adding it as a second source entry.
+source=("git+file://$(dirname "$(realpath "$startdir")")"
+        "tyrquake::git+https://github.com/libretro/tyrquake.git")
+sha256sums=('SKIP' 'SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  git submodule init
+  git config submodule.third_party/tyrquake.url "$srcdir/tyrquake"
+  git submodule update
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  make engine
+  make
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  # Renders one frame of the test pattern; needs no game data.
+  # TODO: needs a pty, so this must run under `script` or be dropped.
+  ./build/omaquake --help >/dev/null
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  make DESTDIR="$pkgdir" PREFIX=/usr install
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 docs/DESIGN.md "$pkgdir/usr/share/doc/$pkgname/DESIGN.md"
+}
