@@ -28,6 +28,7 @@
 
 static int kitty_mode;
 static FILE *trace;
+static int64_t esc_since;
 static int quit_requested;
 static unsigned char buf[1024];
 static size_t buflen;
@@ -333,9 +334,28 @@ void oq_input_poll(oq_key_fn fn, void *ud)
              * not fully arrived.  Under the kitty protocol Escape itself
              * comes through as CSI 27 u, so a lone ESC is NEVER the Escape
              * key there -- treating it as one fires a spurious menu-back on
-             * every split read. */
-            if (kitty_mode)
-                break;
+             * every split read.
+             *
+             * But never wait forever: if the terminal turns out not to be
+             * reporting in the enhanced format after all, a lone ESC would
+             * sit here unconsumed and block every key behind it.  Give the
+             * rest of the sequence a grace period, then take it at face
+             * value. */
+            if (kitty_mode) {
+                int64_t t = now_ms();
+
+                if (!esc_since) {
+                    esc_since = t;
+                    break;
+                }
+                if (t - esc_since < 50)
+                    break;
+                esc_since = 0;
+                emit(RETROK_ESCAPE, 1, 0, fn, ud);
+                emit(RETROK_ESCAPE, 0, 0, fn, ud);
+                i++;
+                continue;
+            }
             emit(RETROK_ESCAPE, 1, 0, fn, ud);
             i++;
             continue;
@@ -364,6 +384,9 @@ void oq_input_poll(oq_key_fn fn, void *ud)
         emit(map_unicode(c), 1, 0, fn, ud);
         i++;
     }
+
+    if (buflen && buf[0] != 0x1b)
+        esc_since = 0;
 
     if (i >= buflen)
         buflen = 0;

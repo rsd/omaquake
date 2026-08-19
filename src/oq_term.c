@@ -85,15 +85,17 @@ void oq_term_present(const char *s, size_t len)
     write_all_n(out, o);
 }
 
-/* Ask the terminal for its kitty-keyboard flags, then send a Primary Device
- * Attributes request as a sentinel.  Every terminal answers DA, so when we
- * see the DA reply we know the flags reply is either already in the buffer
- * or never coming. */
-static int probe_kitty_keyboard(void)
+/* Query the terminal's current kitty-keyboard flags.  Returns the flag word,
+ * or -1 if the terminal did not answer (protocol unsupported).
+ *
+ * A Primary Device Attributes request is appended as a sentinel: every
+ * terminal answers DA, so once the DA reply arrives we know the flags reply
+ * is either already in hand or never coming. */
+static int query_kitty_flags(void)
 {
     char buf[256];
     size_t used = 0;
-    int saw_flags = 0;
+    const char *p;
 
     write_all("\033[?u\033[c");
 
@@ -102,38 +104,35 @@ static int probe_kitty_keyboard(void)
         ssize_t n;
 
         if (poll(&pfd, 1, 200) <= 0)
-            break;              /* timeout: assume unsupported */
-
+            break;
         n = read(STDIN_FILENO, buf + used, sizeof(buf) - 1 - used);
         if (n <= 0)
             break;
         used += (size_t)n;
         buf[used] = '\0';
-
-        if (strstr(buf, "\033[?"))
-            saw_flags = 1;
-        /* DA reply ends in 'c'; it is our end-of-conversation marker. */
         if (memchr(buf, 'c', used))
             break;
         if (used >= sizeof(buf) - 1)
             break;
     }
+    buf[used] = '\0';
 
-    /* A kitty-flags reply is CSI ? <digits> u -- distinguish it from the DA
-     * reply, which is CSI ? <digits> ; ... c. */
-    {
-        const char *p = buf;
-        while ((p = strstr(p, "\033[?")) != NULL) {
-            const char *q = p + 3;
-            while (*q >= '0' && *q <= '9')
-                q++;
-            if (*q == 'u')
-                return 1;
-            p = q;
+    /* A flags reply is CSI ? <digits> u.  The DA reply also starts CSI ?
+     * but ends in 'c', so require the 'u' terminator. */
+    p = buf;
+    while ((p = strstr(p, "\033[?")) != NULL) {
+        const char *q = p + 3;
+        int value = 0;
+
+        while (*q >= '0' && *q <= '9') {
+            value = value * 10 + (*q - '0');
+            q++;
         }
+        if (*q == 'u')
+            return value;
+        p = q;
     }
-    (void)saw_flags;
-    return 0;
+    return -1;
 }
 
 int oq_term_init(void)
@@ -162,21 +161,36 @@ int oq_term_init(void)
     signal(SIGTERM, on_signal);
     signal(SIGWINCH, SIG_IGN);   /* we poll TIOCGWINSZ instead */
 
-    has_key_release = probe_kitty_keyboard();
-    if (has_key_release) {
+    write_all("\033[?1049h"     /* alternate screen         */
+              "\033[?25l"       /* hide cursor              */
+              "\033[?7l"        /* no autowrap: a glyph in  */
+                                 /* the last column must not */
+                                 /* wrap and scroll          */
+              "\033[2J");       /* clear                    */
+    alt_screen = 1;
+
+    /* The keyboard-mode stack is PER SCREEN, so this must happen after the
+     * switch to the alternate screen -- pushing first looks like it works
+     * and is then silently discarded by \033[?1049h, leaving us believing
+     * we have key releases while the terminal sends legacy bytes.  The
+     * engine then sees presses that never end and every key sticks down. */
+    if (query_kitty_flags() >= 0) {
         char seq[32];
+        int got;
+
         snprintf(seq, sizeof(seq), "\033[>%du", KITTY_KBD_FLAGS);
         write_all(seq);
         kbd_pushed = 1;
-    }
 
-    write_all("\033[?1049h"     /* alternate screen        */
-              "\033[?25l"       /* hide cursor             */
-              "\033[?7l"        /* no autowrap: a glyph in */
-                                 /* the last column must not */
-                                 /* wrap and scroll          */
-              "\033[2J");       /* clear                   */
-    alt_screen = 1;
+        /* Verify rather than assume: we need bit 1 (report event types) or
+         * there are no releases and the fallback is the honest choice. */
+        got = query_kitty_flags();
+        has_key_release = (got >= 0 && (got & 2));
+        if (!has_key_release) {
+            write_all("\033[<u");
+            kbd_pushed = 0;
+        }
+    }
     return 0;
 }
 
