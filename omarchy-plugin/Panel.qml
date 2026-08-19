@@ -63,7 +63,12 @@ Panel {
         id: button
         anchors.fill: parent
         bar: root.bar
-        text: "Q"
+        iconComponent: Component {
+            QuakeIcon {
+                iconSize: Style.bar.iconCanvas
+                color: button.foreground
+            }
+        }
         onPressed: function (b) { root.toggle() }
     }
 
