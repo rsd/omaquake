@@ -121,9 +121,12 @@ and how each was classified. Only a device with `REL_X`, `REL_Y` and
 outright even if it also looks like a pointer — many gaming mice expose a
 second keyboard node, and reading that would be keylogging.
 
-The grab is released on exit, on Ctrl-C, and by the kernel when the process
-dies, so a `kill -9` always recovers your pointer. Quitting is on the keyboard
-(Ctrl-Q / Ctrl-\ / F10), never the mouse.
+**Ctrl-G** releases the pointer and gives it back to the desktop; press it
+again to retake it. The grab is also dropped automatically whenever the
+terminal loses focus and retaken when it returns, so alt-tabbing away just
+works. Beyond that it is released on exit, on Ctrl-C, and by the kernel when
+the process dies, so a `kill -9` always recovers your pointer. Quitting is on
+the keyboard (Ctrl-Q / Ctrl-\ / F10), never the mouse.
 
 **terminal (`--mouse=term`)** parses SGR-Pixels reports (mode 1016) from the
 terminal itself. Portable — no special permissions, works over SSH — but it
@@ -138,6 +141,7 @@ terminal that supports mode 1016 — Ghostty, kitty, foot and WezTerm do.
 | option | default | |
 |---|---|---|
 | `--mouse=` | `auto` | `auto`, `evdev`, `term` or `none` |
+| Ctrl-G | | release / retake the pointer while running |
 | `--mouse-dev=PATH` | | force a specific evdev node |
 | `--mouse-list` | | list input devices and their classification, then exit |
 | `--no-mouse` | | same as `--mouse=none` |
@@ -148,6 +152,18 @@ terminal that supports mode 1016 — Ghostty, kitty, foot and WezTerm do.
 
 `--mouse-sens` is likely to want different values between the two sources:
 terminal deltas are screen pixels, evdev deltas are raw mouse counts.
+
+## Resolution
+
+`--res=auto` (the default) renders at exactly the detail the cell grid can
+display: one character cell resolves 2x4 pixels with sub-cell glyphs, so a
+200x50 terminal renders at 400x200 and a 400x100 terminal at 800x400. Below
+the engine's 320x200 floor it clamps.
+
+Raising the engine resolution is nearly free — 1920x1200 still holds the
+60 fps target — because presentation runs on another thread. Pin it with
+`--res=640x400` if you want a fixed size, and use `--cells=WxH` to cap the
+canvas below the terminal size (the picture is then centred).
 
 ## Audio
 
@@ -196,6 +212,8 @@ Known gaps:
   falling back to the terminal source.
 - The evdev grab is taken before the level loads, so the desktop pointer
   freezes for a second or two before the game is interactive.
+- `--res=auto` is resolved once at startup. Resizing the terminal rescales
+  the picture but does not re-render the engine at the new resolution.
 - See `docs/DESIGN.md` for the remaining to-do list and the reasoning behind
   design choices made along the way.
 

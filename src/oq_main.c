@@ -29,9 +29,10 @@ static void usage(const char *argv0)
         "  --keytest        show decoded key events; diagnoses input problems\n"
         "  --frames=N       stop after N frames (demo/benchmark)\n"
         "  --cell=WxH       character cell pixel size (default 10x20)\n"
-        "  --res=WxH        engine render resolution (default 320x200)\n"
+        "  --res=WxH        engine render resolution, or auto to match the\n"
+        "                   terminal (default auto)\n"
         "  --fps=N          presentation rate cap, 0 = every frame (default 30)\n"
-        "  --cells=WxH      cap the canvas; 0x0 fills the terminal\n"
+        "  --cells=WxH      cap the canvas (default 0x0: fill the terminal)\n"
         "  --log=PATH       write the engine log here (never to stdout)\n"
         "  --no-sound       do not open the audio device\n"
         "  --mouse=SRC      evdev | term | none | auto  (default: auto --\n"
@@ -144,6 +145,7 @@ static int run_demo(const oq_present_backend *be, oq_present_config *cfg,
 /* Which source is live.  Decided before the terminal is touched and then
  * confirmed when the grab is taken, because either step can fail. */
 enum { PSRC_NONE, PSRC_TERM, PSRC_EVDEV };
+static int mouse_released;
 static int pointer_src = PSRC_NONE;
 /* The user asked for evdev by name, or named a device: failing over to the
  * terminal would then be a silent substitution of something they did not
@@ -284,15 +286,35 @@ static void mouse_frame(int *dx, int *dy)
     static int had_focus = 1;
     int focus = oq_input_focused();
 
+    if (oq_input_take_mouse_toggle()) {
+        mouse_released = !mouse_released;
+        if (pointer_src == PSRC_EVDEV) {
+            if (mouse_released)
+                oq_evdev_ungrab();
+            else
+                oq_evdev_grab();
+        }
+    }
+
     if (pointer_src == PSRC_EVDEV) {
         int rx, ry;
+
+        /* Hand the pointer back when the player alt-tabs away. The grab is
+         * exclusive, so holding it in the background leaves the whole desktop
+         * without a mouse. */
+        if (focus != had_focus) {
+            if (focus && !mouse_released)
+                oq_evdev_grab();
+            else
+                oq_evdev_ungrab();
+        }
 
         /* Drained even while in the background, so nothing queues up to
          * arrive as one lurch on the way back -- but discarded there: the
          * device is grabbed, so those events are still ours while the
          * player is in another window and must not aim or fire. */
         oq_evdev_poll(&rx, &ry, focus ? evdev_button_sink : NULL, NULL);
-        if (focus)
+        if (focus && !mouse_released)
             oq_mouse_move(rx, ry);
     }
     if (focus != had_focus) {
@@ -472,7 +494,7 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
 {
     struct sink_ctx ctx;
     oq_retro_config rc;
-    int rw = 0, rh = 0;
+    char resbuf[32];
     int64_t period, next;
     int frame = 0;
 
@@ -481,16 +503,11 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     ctx.cfg = cfg;
     ctx.period_ns = fps > 0 ? (int64_t)(1000000000.0 / fps) : 0;
 
-    /* Default the cap to the source's own detail limit: one cell resolves
-     * 2x4 pixels with sub-cell glyphs. */
-    if (cap_cols < 0 || cap_rows < 0) {
-        if (sscanf(res, "%dx%d", &rw, &rh) == 2 && rw > 0 && rh > 0) {
-            cap_cols = rw / 2;
-            cap_rows = rh / 4;
-        } else {
-            cap_cols = cap_rows = 0;
-        }
-    }
+    /* Fill the terminal by default. Capping only makes sense when the engine
+     * resolution is pinned below what the cell grid can show, which --res=auto
+     * avoids; --cells is there for when someone wants it anyway. */
+    if (cap_cols < 0 || cap_rows < 0)
+        cap_cols = cap_rows = 0;
     ctx.cap_cols = cap_cols;
     ctx.cap_rows = cap_rows;
 
@@ -516,6 +533,26 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
         oq_term_shutdown();
         fprintf(stderr, "omaquake: could not start the render thread\n");
         return 1;
+    }
+
+    /* --res=auto: render at exactly the detail the cell grid can display.
+     * One cell resolves 2x4 pixels with sub-cell glyphs, so this is the point
+     * where the engine is neither wasting work the terminal cannot show nor
+     * making chafa upscale detail that was never rendered. Raising the engine
+     * resolution turns out to be nearly free -- 1920x1200 still holds the
+     * 60fps target -- because presentation happens on another thread. */
+    if (!strcmp(res, "auto")) {
+        int tc, tr, w, h;
+
+        oq_term_size(&tc, &tr);
+        w = tc * 2;
+        h = tr * 4;
+        if (w < 320)  w = 320;
+        if (h < 200)  h = 200;
+        if (w > 1920) w = 1920;
+        if (h > 1200) h = 1200;
+        snprintf(resbuf, sizeof(resbuf), "%dx%d", w, h);
+        res = resbuf;
     }
 
     memset(&rc, 0, sizeof(rc));
@@ -588,7 +625,7 @@ int main(int argc, char **argv)
 {
     const char *video = "chafa";
     const char *game = NULL;
-    const char *res = "320x200";
+    const char *res = "auto";
     const char *logpath = NULL;
     const oq_present_backend *be;
     oq_present_config cfg;

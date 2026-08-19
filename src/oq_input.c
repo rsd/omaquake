@@ -30,6 +30,7 @@ static int kitty_mode;
 static FILE *trace;
 static int64_t esc_since;
 static int quit_requested;
+static int mouse_toggle;
 static int focused = 1;
 /* Big enough that a poll interval's worth of pointer reports cannot fill
  * it: any-motion tracking at 1kHz is ~20KB/s, so even a 10Hz poll leaves
@@ -88,6 +89,14 @@ void oq_input_init(int has_key_release)
     quit_requested = 0;
     focused = 1;
     memset(holds, 0, sizeof(holds));
+}
+
+int oq_input_take_mouse_toggle(void)
+{
+    int v = mouse_toggle;
+
+    mouse_toggle = 0;
+    return v;
 }
 
 int oq_input_quit(void)
@@ -236,6 +245,14 @@ static void emit(unsigned keycode, int down, uint16_t mods,
      * sequence -- Ctrl-\ comes through as CSI 92;5u and the 0x1c byte never
      * appears -- so a raw-byte test silently stops working the moment the
      * protocol is active. */
+    /* Ctrl-G releases or retakes the pointer. Under evdev the grab is
+     * exclusive, so without an escape hatch the only way to get the desktop
+     * pointer back would be to quit the game. */
+    if (down && (mods & RETROKMOD_CTRL) && keycode == RETROK_g) {
+        mouse_toggle = 1;
+        return;
+    }
+
     if (down && (keycode == RETROK_F10 ||
                  ((mods & RETROKMOD_CTRL) &&
                   (keycode == RETROK_BACKSLASH || keycode == RETROK_q)))) {

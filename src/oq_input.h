@@ -58,6 +58,10 @@ void oq_input_set_trace(FILE *fp);
  * view for as long as the player is away. */
 int  oq_input_focused(void);
 
+/* Returns 1 once, and clears, when the player asked to release or retake the
+ * pointer (Ctrl-G). */
+int  oq_input_take_mouse_toggle(void);
+
 /* Non-zero once the user asked to quit (Ctrl-\). */
 int  oq_input_quit(void);
 

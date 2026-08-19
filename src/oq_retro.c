@@ -166,6 +166,17 @@ static void RETRO_CALLCONV video_refresh(const void *data, unsigned width,
     if (conf.want_frame && !conf.want_frame(conf.sink_ud))
         return;
 
+    {
+        static unsigned last_w, last_h;
+
+        if ((width != last_w || height != last_h) && logfp) {
+            fprintf(logfp, "video: %ux%u\n", width, height);
+            fflush(logfp);
+            last_w = width;
+            last_h = height;
+        }
+    }
+
     ensure_rgb((size_t)width * height * 3);
     if (!rgb_buf)
         return;
