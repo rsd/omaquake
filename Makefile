@@ -14,7 +14,8 @@ TYRQUAKE    := third_party/tyrquake
 TYRQUAKE_A  := $(TYRQUAKE)/tyrquake_libretro_unix.a
 
 SRC         := src/oq_main.c src/oq_present.c src/oq_term.c \
-               src/oq_input.c src/oq_retro.c src/oq_render.c src/oq_audio.c
+               src/oq_input.c src/oq_mouse.c src/oq_retro.c \
+               src/oq_render.c src/oq_audio.c
 
 # With STATIC_LINKING=1 the core deliberately drops libretro-common (see
 # tyrquake/Makefile.common:119) and expects the frontend to provide it.

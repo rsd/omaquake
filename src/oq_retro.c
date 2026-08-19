@@ -8,6 +8,7 @@
 #include "oq_retro.h"
 
 #include "oq_audio.h"
+#include "oq_input.h"
 
 #include <libretro.h>
 
@@ -23,6 +24,30 @@ static size_t rgb_cap;
 static double core_fps = 60.0;
 static int audio_on;
 static FILE *logfp;
+
+/* Pending relative motion, in the counts IN_Move expects.  Reading clears
+ * it, which is the libretro contract for a relative device. */
+static int mouse_dx, mouse_dy;
+static int mouse_btn[3];        /* left, middle, right -- held */
+static int mouse_wheel[4];      /* up, down, left, right -- latched pulses */
+
+/* The engine polls the arrow keys through input_state every frame and calls
+ * Key_Event(K_UPARROW, 0) whenever we answer 0.  That poll runs on the same
+ * key numbers the keyboard callback delivers, so unless we mirror what the
+ * terminal told us is held, it releases the arrow key the callback just
+ * pressed and turning stops dead. */
+static int arrow_down[4];       /* up, down, left, right */
+
+static int arrow_slot(unsigned keycode)
+{
+    switch (keycode) {
+    case RETROK_UP:    return 0;
+    case RETROK_DOWN:  return 1;
+    case RETROK_LEFT:  return 2;
+    case RETROK_RIGHT: return 3;
+    }
+    return -1;
+}
 
 /* Anything the core prints must not reach stdout -- stdout is the picture.
  * Without this the first log line shreds the frame. */
@@ -193,13 +218,77 @@ static size_t RETRO_CALLCONV audio_sample_batch(const int16_t *data,
 
 static void RETRO_CALLCONV input_poll(void) { }
 
-/* All input reaches the engine through the keyboard callback, so the
- * joypad surface stays idle. */
+/* Keys reach the engine through the keyboard callback; the pointer cannot,
+ * because the callback carries no axes.  It comes through here instead --
+ * IN_Move reads MOUSE_X/Y as RELATIVE deltas and applies them straight to
+ * cl.viewangles, which is exactly the free-look path we want. */
 static int16_t RETRO_CALLCONV input_state(unsigned port, unsigned device,
                                           unsigned index, unsigned id)
 {
-    (void)port; (void)device; (void)index; (void)id;
+    (void)index;
+
+    if (port != 0)
+        return 0;
+
+    if (device == RETRO_DEVICE_MOUSE) {
+        int v;
+
+        switch (id) {
+        case RETRO_DEVICE_ID_MOUSE_X:
+            v = mouse_dx;
+            mouse_dx = 0;               /* relative: cleared on read */
+            return (int16_t)v;
+        case RETRO_DEVICE_ID_MOUSE_Y:
+            v = mouse_dy;
+            mouse_dy = 0;
+            return (int16_t)v;
+        case RETRO_DEVICE_ID_MOUSE_LEFT:   return (int16_t)mouse_btn[0];
+        case RETRO_DEVICE_ID_MOUSE_MIDDLE: return (int16_t)mouse_btn[1];
+        case RETRO_DEVICE_ID_MOUSE_RIGHT:  return (int16_t)mouse_btn[2];
+        case RETRO_DEVICE_ID_MOUSE_WHEELUP:
+        case RETRO_DEVICE_ID_MOUSE_WHEELDOWN:
+        case RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELUP:
+        case RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELDOWN: {
+            /* A wheel notch is one event with no release.  Report it for
+             * exactly one poll so the engine sees a press and then the
+             * release that ends the bound command. */
+            int slot = (id == RETRO_DEVICE_ID_MOUSE_WHEELUP)   ? 0 :
+                       (id == RETRO_DEVICE_ID_MOUSE_WHEELDOWN) ? 1 :
+                       (id == RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELUP) ? 2 : 3;
+
+            v = mouse_wheel[slot];
+            mouse_wheel[slot] = 0;
+            return (int16_t)v;
+        }
+        }
+        return 0;
+    }
+
+    if (device == RETRO_DEVICE_KEYBOARD) {
+        int slot = arrow_slot(id);
+
+        return slot >= 0 ? (int16_t)arrow_down[slot] : 0;
+    }
     return 0;
+}
+
+void oq_retro_mouse_move(int dx, int dy)
+{
+    mouse_dx += dx;
+    mouse_dy += dy;
+}
+
+void oq_retro_mouse_button(int index, int down)
+{
+    switch (index) {
+    case OQ_MB_LEFT:   mouse_btn[0] = down; break;
+    case OQ_MB_MIDDLE: mouse_btn[1] = down; break;
+    case OQ_MB_RIGHT:  mouse_btn[2] = down; break;
+    case OQ_MB_WHEEL_UP:    if (down) mouse_wheel[0] = 1; break;
+    case OQ_MB_WHEEL_DOWN:  if (down) mouse_wheel[1] = 1; break;
+    case OQ_MB_WHEEL_LEFT:  if (down) mouse_wheel[2] = 1; break;
+    case OQ_MB_WHEEL_RIGHT: if (down) mouse_wheel[3] = 1; break;
+    }
 }
 
 int oq_retro_init(const oq_retro_config *cfg, const char *pak_path)
@@ -232,6 +321,12 @@ int oq_retro_init(const oq_retro_config *cfg, const char *pak_path)
         retro_deinit();
         return -1;
     }
+
+    /* IN_Init leaves port 0 on RETRO_DEVICE_JOYPAD, and on that setting the
+     * core never reads the mouse at all: both the pointer deltas in IN_Move
+     * and the mouse buttons in Sys_SendKeyEvents sit behind a test for the
+     * keyboard device.  Nothing else selects it -- the frontend has to. */
+    retro_set_controller_port_device(0, RETRO_DEVICE_KEYBOARD);
 
     memset(&av, 0, sizeof(av));
     retro_get_system_av_info(&av);
@@ -271,6 +366,10 @@ double oq_retro_fps(void)
 
 void oq_retro_key(unsigned keycode, int down, uint16_t mods)
 {
+    int slot = arrow_slot(keycode);
+
+    if (slot >= 0)
+        arrow_down[slot] = down ? 1 : 0;
     if (kbd_cb)
         kbd_cb(down ? true : false, keycode, 0, mods);
 }

@@ -30,7 +30,11 @@ static int kitty_mode;
 static FILE *trace;
 static int64_t esc_since;
 static int quit_requested;
-static unsigned char buf[1024];
+static int focused = 1;
+/* Big enough that a poll interval's worth of pointer reports cannot fill
+ * it: any-motion tracking at 1kHz is ~20KB/s, so even a 10Hz poll leaves
+ * this three quarters empty.  Overflowing it would stall the tty. */
+static unsigned char buf[16384];
 static size_t buflen;
 
 struct hold {
@@ -82,12 +86,18 @@ void oq_input_init(int has_key_release)
     kitty_mode = has_key_release;
     buflen = 0;
     quit_requested = 0;
+    focused = 1;
     memset(holds, 0, sizeof(holds));
 }
 
 int oq_input_quit(void)
 {
     return quit_requested;
+}
+
+int oq_input_focused(void)
+{
+    return focused;
 }
 
 /* ---- keycode mapping ----------------------------------------------- */
@@ -240,6 +250,79 @@ static void emit(unsigned keycode, int down, uint16_t mods,
 
 /* ---- escape sequence parsing ---------------------------------------- */
 
+/* Parse one SGR mouse report: ESC [ < btn ; x ; y (M|m), M for a press or
+ * motion and m for a release.  Returns bytes consumed, 0 if incomplete.
+ *
+ * The coordinates are signed.  A terminal that is tracking a drag keeps
+ * reporting after the pointer leaves the window, and then x or y arrives
+ * with a leading '-' -- read it as an unsigned field and the view snaps
+ * across the map. */
+static size_t parse_sgr_mouse(size_t i, oq_mouse_fn mfn, void *ud)
+{
+    size_t j = i + 3;               /* skip ESC [ < */
+    int fields[3] = {0, 0, 0};
+    int sign[3] = {1, 1, 1};
+    int nf = 0;
+    oq_mouse_event ev;
+    int code, release;
+
+    while (j < buflen) {
+        unsigned char c = buf[j];
+
+        if (c == '-') {
+            if (nf < 3)
+                sign[nf] = -1;
+            j++;
+        } else if (c >= '0' && c <= '9') {
+            if (nf < 3)
+                fields[nf] = fields[nf] * 10 + (c - '0');
+            j++;
+        } else if (c == ';') {
+            if (nf < 2)
+                nf++;
+            j++;
+        } else if (c == 'M' || c == 'm') {
+            break;
+        } else if (c == 0x1b) {
+            /* Malformed, and the next sequence has already started.  Stop
+             * short of its ESC: swallowing that would take a real keystroke
+             * down with the bad report. */
+            return j - i;
+        } else {
+            return j - i + 1;       /* malformed: drop it */
+        }
+    }
+    if (j >= buflen)
+        return 0;                   /* incomplete */
+
+    release = (buf[j] == 'm');
+    code = fields[0] * sign[0];
+
+    ev.x = fields[1] * sign[1];
+    ev.y = fields[2] * sign[2];
+    /* Bit 5 means "the pointer moved"; bits 2-4 are shift/meta/ctrl and are
+     * not ours to act on -- the engine has its own modifier binds. */
+    ev.motion = (code & 32) != 0;
+    ev.down = !release;
+
+    code &= ~(4 | 8 | 16 | 32);
+    if (code >= 64 && code <= 67)
+        ev.button = OQ_MB_WHEEL_UP + (code - 64);
+    else if ((code & 3) == 3)
+        ev.button = OQ_MB_NONE;
+    else
+        ev.button = code & 3;
+
+    if (trace)
+        fprintf(trace, "  -> MOUSE %-6s btn=%-2d x=%-6d y=%-6d\r\n",
+                ev.motion ? "MOTION" : (release ? "UP" : "DOWN"),
+                ev.button, ev.x, ev.y);
+    if (mfn)
+        mfn(&ev, ud);
+    return j - i + 1;
+}
+
+
 /* Parse one CSI sequence starting at buf[i] (which is ESC).  Returns bytes
  * consumed, or 0 if the sequence has not fully arrived yet. */
 static size_t parse_csi(size_t i, oq_key_fn fn, void *ud)
@@ -304,19 +387,26 @@ have_final:
     return j - i + 1;
 }
 
-void oq_input_poll(oq_key_fn fn, void *ud)
+/* Read whatever stdin has.  Returns 1 if the buffer filled up, meaning
+ * there may be more waiting. */
+static int fill(void)
 {
     struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
-    size_t i;
 
     while (buflen < sizeof(buf) && poll(&pfd, 1, 0) > 0 &&
            (pfd.revents & POLLIN)) {
         ssize_t n = read(STDIN_FILENO, buf + buflen, sizeof(buf) - buflen);
 
         if (n <= 0)
-            break;
+            return 0;
         buflen += (size_t)n;
     }
+    return buflen == sizeof(buf);
+}
+
+static void parse_buffer(oq_key_fn fn, oq_mouse_fn mfn, void *ud)
+{
+    size_t i;
 
     if (trace && buflen) {
         size_t k;
@@ -333,6 +423,44 @@ void oq_input_poll(oq_key_fn fn, void *ud)
     while (i < buflen) {
         unsigned char c = buf[i];
 
+        if (c == 0x1b && i + 2 < buflen && buf[i + 1] == '[' &&
+            (buf[i + 2] == 'I' || buf[i + 2] == 'O')) {
+            /* Focus in / out (mode 1004).  Three bytes, no parameters, so
+             * it cannot be confused with a kitty key report. */
+            focused = (buf[i + 2] == 'I');
+            if (trace)
+                fprintf(trace, "  -> FOCUS %s\r\n", focused ? "IN" : "OUT");
+            i += 3;
+            continue;
+        }
+        if (c == 0x1b && i + 2 < buflen && buf[i + 1] == '[' &&
+            buf[i + 2] == '<') {
+            /* Must come before the key path: parse_csi() hands any final
+             * byte in 0x40..0x7e to map_final(), so the M/m terminator of a
+             * mouse report would be read as a cursor key, and the '-' of a
+             * negative coordinate as a private marker to skip. */
+            size_t used = parse_sgr_mouse(i, mfn, ud);
+
+            if (!used)
+                break;
+            i += used;
+            continue;
+        }
+        if (c == 0x1b && i + 2 < buflen && buf[i + 1] == '[' &&
+            buf[i + 2] == 'M') {
+            /* X10 mouse encoding: what a terminal without mode 1016 falls
+             * back to.  Its three payload bytes are arbitrary and would be
+             * decoded as keystrokes, so consume them -- but do not act on
+             * them: X10 coordinates are cell-resolution and capped at 223,
+             * which is useless for aiming. */
+            if (i + 5 >= buflen)
+                break;
+            if (trace)
+                fprintf(trace, "  -> MOUSE x10 report ignored"
+                               " (terminal lacks mode 1016)\r\n");
+            i += 6;
+            continue;
+        }
         if (c == 0x1b && i + 1 < buflen && buf[i + 1] == '[') {
             size_t used = parse_csi(i, fn, ud);
 
@@ -406,4 +534,25 @@ void oq_input_poll(oq_key_fn fn, void *ud)
         memmove(buf, buf + i, buflen - i);
         buflen -= i;
     }
+}
+
+void oq_input_poll(oq_key_fn fn, oq_mouse_fn mfn, void *ud)
+{
+    /* Drain until stdin is empty rather than until the buffer is full: a
+     * pointer under any-motion tracking produces input far faster than a
+     * key does, and leaving it in the tty means aiming lags the frame it
+     * belongs to and keeps falling further behind. */
+    while (fill()) {
+        size_t before = buflen;
+
+        parse_buffer(fn, mfn, ud);
+        if (buflen >= before) {
+            /* Nothing consumed and no room left: the buffer holds one
+             * absurd unterminated sequence.  Drop it, or every key after
+             * it is stuck behind it forever. */
+            buflen = 0;
+            break;
+        }
+    }
+    parse_buffer(fn, mfn, ud);
 }

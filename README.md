@@ -100,8 +100,31 @@ config's `bind CTRL +attack` (etc.) references a keyname that no longer
 exists, `Key_StringToKeynum` fails, and the bind is dropped **silently** —
 fire, run and strafe simply do nothing until you load `autoexec.cfg`.
 
-Mouse look is being implemented and is **in progress**; do not expect
-relative mouse motion to work yet.
+### Mouse look
+
+Mouse look works, with one caveat inherent to terminals: they report
+**absolute** pointer positions and offer no pointer lock or warp, so the
+pointer eventually reaches the window edge and cannot be re-centred. Pure
+delta-based aiming would therefore wall out and be unplayable.
+
+OmaQuake uses a hybrid. In the central region the motion is 1:1, so aiming
+and flicks feel mouse-like. In a band along each edge (15% by default) a
+steering term is *added*, ramped quadratically so crossing into it is a nudge
+rather than a step — push the pointer to the edge and hold to keep turning.
+Expect real mouse feel for aiming and something closer to a good analog stick
+for sustained 180s.
+
+| option | default | |
+|---|---|---|
+| `--no-mouse` | | leave the pointer alone entirely |
+| `--mouse-sens=F` | 2.0 | counts per pixel (~0.13°/px) |
+| `--mouse-edge=F` | 0.15 | steering band as a fraction of each side; `0` gives plain 1:1 |
+| `--mouse-turn=F` | 220 | steering rate at the very edge, deg/sec |
+| `--mouse-invert` | | invert pitch |
+
+Requires a terminal supporting SGR-Pixels mouse reporting (mode 1016) —
+Ghostty, kitty, foot and WezTerm do. Cell-granularity reporting is too coarse
+for aiming and is not used.
 
 ## Audio
 
@@ -141,10 +164,13 @@ available) plays sound.
 
 Known gaps:
 
-- **Mouse look** is being worked on right now and is not complete. A
-  terminal offers no native relative pointer motion, so this needs some
-  scheme layered on top of SGR mouse reporting or similar; treat this as
-  unfinished rather than assume any particular behaviour.
+- **Held keyboard keys are not released when the terminal loses focus.**
+  Mouse buttons are; keys are not, so alt-tabbing mid-strafe can leave a key
+  stuck down. Needs held-key tracking in `oq_input`.
+- **The `CSI 14 t` text-area probe is untested against a live terminal.** It
+  runs once at startup; if a terminal does not answer, the `--cell` geometry
+  is used instead, which is exact only when the text area is a whole number
+  of cells.
 - See `docs/DESIGN.md` for the remaining to-do list and the reasoning behind
   design choices made along the way.
 

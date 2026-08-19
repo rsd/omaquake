@@ -26,6 +26,14 @@ int    oq_retro_init(const oq_retro_config *cfg, const char *pak_path);
 void   oq_retro_run(void);              /* advance exactly one frame */
 double oq_retro_fps(void);              /* from retro_get_system_av_info */
 void   oq_retro_key(unsigned keycode, int down, uint16_t mods);
+
+/* Relative mouse motion in engine counts, added to whatever has not been
+ * read yet.  The core clears it by reading, once per frame, in IN_Move. */
+void   oq_retro_mouse_move(int dx, int dy);
+
+/* index is an OQ_MB_* button; wheel "buttons" have no release, so they are
+ * latched and cleared by the read that reports them. */
+void   oq_retro_mouse_button(int index, int down);
 void   oq_retro_shutdown(void);
 
 #endif /* OQ_RETRO_H */

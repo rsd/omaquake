@@ -1,5 +1,6 @@
 /* OmaQuake -- Quake rendered as characters in a terminal. */
 #include "oq_input.h"
+#include "oq_mouse.h"
 #include "oq_present.h"
 #include "oq_render.h"
 #include "oq_retro.h"
@@ -32,6 +33,12 @@ static void usage(const char *argv0)
         "  --cells=WxH      cap the canvas; 0x0 fills the terminal\n"
         "  --log=PATH       write the engine log here (never to stdout)\n"
         "  --no-sound       do not open the audio device\n"
+        "  --no-mouse       do not take over the pointer\n"
+        "  --mouse-sens=F   pointer sensitivity (default 2.0)\n"
+        "  --mouse-edge=F   steering band, fraction of each side (default 0.15,\n"
+        "                   0 turns steering off and leaves plain 1:1 look)\n"
+        "  --mouse-turn=F   steering rate at the edge, deg/sec (default 220)\n"
+        "  --mouse-invert   invert pitch\n"
         "  --help\n",
         argv0, oq_present_available());
 }
@@ -108,6 +115,66 @@ static int run_demo(const oq_present_backend *be, oq_present_config *cfg,
 
 
 
+/* ---- pointer ---------------------------------------------------------- */
+
+/* Pixels per character cell, so the size of the text area can be recomputed
+ * after a resize without asking the terminal again -- that would be a write
+ * to the terminal from the wrong thread once the game is running. */
+static int cell_px_w = 10, cell_px_h = 20;
+
+static void mouse_calibrate(const oq_present_config *cfg, int cols, int rows)
+{
+    int pw, ph;
+
+    if (oq_term_text_pixels(&pw, &ph) == 0 && cols > 0 && rows > 0) {
+        cell_px_w = pw / cols;
+        cell_px_h = ph / rows;
+    }
+    /* Either the terminal did not answer CSI 14 t, or it answered with an
+     * area smaller than one cell per row.  Fall back to --cell, which is
+     * the player's own estimate of their cell size. */
+    if (cell_px_w < 1) cell_px_w = cfg->cell_w > 0 ? cfg->cell_w : 10;
+    if (cell_px_h < 1) cell_px_h = cfg->cell_h > 0 ? cfg->cell_h : 20;
+
+    oq_mouse_set_extent(cols * cell_px_w, rows * cell_px_h);
+}
+
+/* Motion drives the view; buttons go through as MOUSE1..MOUSE7 so they can
+ * be bound in autoexec.cfg.  There is deliberately no "hold to look"
+ * modifier: mode 1003 reports motion with nothing held, and a first-person
+ * game wants the view on the pointer at all times -- reserving a button for
+ * engagement would cost the one that should be firing. */
+static void mouse_sink(const oq_mouse_event *ev, void *ud)
+{
+    (void)ud;
+    oq_mouse_track(ev->x, ev->y);
+    /* A drag repeats the held button on every motion report; only the
+     * transitions are button events. */
+    if (ev->button != OQ_MB_NONE && !ev->motion)
+        oq_retro_mouse_button(ev->button, ev->down);
+}
+
+/* Per-frame pointer work, shared by the game loop and --keytest. */
+static void mouse_frame(int *dx, int *dy)
+{
+    static int had_focus = 1;
+    int focus = oq_input_focused();
+
+    if (focus != had_focus) {
+        had_focus = focus;
+        /* A button still held when the terminal loses focus never gets its
+         * release: reporting stops while we are in the background, so the
+         * engine would go on firing for as long as the player is away. */
+        if (!focus) {
+            oq_retro_mouse_button(OQ_MB_LEFT, 0);
+            oq_retro_mouse_button(OQ_MB_MIDDLE, 0);
+            oq_retro_mouse_button(OQ_MB_RIGHT, 0);
+        }
+    }
+    oq_mouse_set_active(focus);
+    oq_mouse_step(dx, dy);
+}
+
 /* Prints what the terminal actually sends and what we decode it to.  When a
  * key does not work in game, this says whether the bytes never arrived, or
  * arrived and were decoded wrong. */
@@ -116,28 +183,52 @@ static void keytest_sink(unsigned keycode, int down, uint16_t mods, void *ud)
     (void)keycode; (void)down; (void)mods; (void)ud;
 }
 
-static int run_keytest(void)
+static int run_keytest(oq_present_config *cfg, const oq_mouse_config *mc)
 {
-    char hdr[256];
+    char hdr[512];
+    int cols, rows, pw = 0, ph = 0;
     int n;
 
     oq_input_init(oq_term_has_key_release());
     oq_input_set_trace(stdout);
+    oq_term_size(&cols, &rows);
+
+    if (mc) {
+        oq_mouse_init(mc);
+        mouse_calibrate(cfg, cols, rows);
+        oq_term_mouse_enable();
+        pw = cols * cell_px_w;
+        ph = rows * cell_px_h;
+    }
 
     n = snprintf(hdr, sizeof(hdr),
                  "key-release: %s\r\n"
-                 "press keys (arrows, Enter, W, Ctrl); Ctrl-Q, Ctrl-\\ or F10 quits\r\n\r\n",
+                 "pointer:     %s (text area %dx%d px, %dx%d per cell)\r\n"
+                 "press keys (arrows, Enter, W, Ctrl) or move the pointer;"
+                 " Ctrl-Q, Ctrl-\\ or F10 quits\r\n\r\n",
                  oq_term_has_key_release()
                      ? "YES - kitty keyboard protocol active"
-                     : "NO - press-only fallback, holds are synthesised");
+                     : "NO - press-only fallback, holds are synthesised",
+                 mc ? "on" : "off (--no-mouse)", pw, ph,
+                 cell_px_w, cell_px_h);
     fwrite(hdr, 1, (size_t)n, stdout);
     fflush(stdout);
 
     while (!oq_term_quit_requested && !oq_input_quit()) {
         struct timespec ts = { 0, 20 * 1000 * 1000 };
 
-        oq_input_poll(keytest_sink, NULL);
+        oq_input_poll(keytest_sink, mc ? mouse_sink : NULL, NULL);
         oq_input_expire(keytest_sink, NULL);
+        if (mc) {
+            int dx, dy, mx, my;
+            double ex, ey;
+
+            mouse_frame(&dx, &dy);
+            oq_mouse_debug(&mx, &my, &ex, &ey);
+            if (dx || dy)
+                printf("     look dx=%+-6d dy=%+-6d at %d,%d"
+                       " steer=%+.2f,%+.2f\r\n", dx, dy, mx, my, ex, ey);
+        }
         fflush(stdout);
         nanosleep(&ts, NULL);
     }
@@ -149,6 +240,7 @@ static int run_keytest(void)
 struct sink_ctx {
     const oq_present_backend *be;
     oq_present_config *cfg;
+    int      mouse;                /* pointer look is on */
     int      cap_cols, cap_rows;   /* 0 = fill the terminal */
     int64_t  period_ns;            /* minimum gap between presents */
     int64_t  next_present;
@@ -209,6 +301,12 @@ static void video_sink(const uint8_t *rgb, int w, int h, int stride, void *ud)
 
     if (oq_term_size(&cols, &rows)) {
         fit_canvas(ctx, cols, rows);
+        /* The bands are placed against the text area, so a resize moves
+         * them.  Scaling the cached cell size is deliberate: re-querying
+         * means writing to the terminal, and stdout belongs to the render
+         * thread from here on. */
+        if (ctx->mouse)
+            oq_mouse_set_extent(cols * cell_px_w, rows * cell_px_h);
         /* The clear happens on the render thread: two threads writing to the
          * same fd can interleave mid escape-sequence and corrupt the frame. */
         oq_render_reconfigure(ctx->cfg);
@@ -232,7 +330,8 @@ static int64_t now_ns(void)
 
 static int run_game(const oq_present_backend *be, oq_present_config *cfg,
                     const char *pak, const char *res, const char *logpath,
-                    int nframes, int sound, int fps, int cap_cols, int cap_rows)
+                    int nframes, int sound, int fps, int cap_cols, int cap_rows,
+                    const oq_mouse_config *mc)
 {
     struct sink_ctx ctx;
     oq_retro_config rc;
@@ -257,6 +356,7 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     }
     ctx.cap_cols = cap_cols;
     ctx.cap_rows = cap_rows;
+    ctx.mouse = mc != NULL;
 
     {
         int tc, tr;
@@ -265,6 +365,13 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
         fit_canvas(&ctx, tc, tr);
         oq_term_clear();
         be->resize(cfg);
+        /* Both of these write to the terminal, so they have to happen
+         * before the render thread starts and take stdout over. */
+        if (mc) {
+            oq_mouse_init(mc);
+            mouse_calibrate(cfg, tc, tr);
+            oq_term_mouse_enable();
+        }
     }
 
     if (oq_render_start(be, cfg)) {
@@ -298,8 +405,15 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     while (!oq_term_quit_requested && !oq_input_quit()) {
         int64_t remain;
 
-        oq_input_poll(key_sink, NULL);
+        oq_input_poll(key_sink, mc ? mouse_sink : NULL, NULL);
         oq_input_expire(key_sink, NULL);
+        if (mc) {
+            int dx, dy;
+
+            mouse_frame(&dx, &dy);
+            if (dx || dy)
+                oq_retro_mouse_move(dx, dy);
+        }
         oq_retro_run();
 
         if (nframes && ++frame >= nframes)
@@ -317,6 +431,7 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     }
 
     oq_render_stop();
+    oq_term_mouse_disable();
     oq_retro_shutdown();
     return 0;
 }
@@ -329,8 +444,17 @@ int main(int argc, char **argv)
     const char *logpath = NULL;
     const oq_present_backend *be;
     oq_present_config cfg;
+    oq_mouse_config mc;
     int demo = 0, keytest = 0, nframes = 0, sound = 1, i, rc;
-    int fps = 30, cap_cols = -1, cap_rows = -1;
+    int fps = 30, cap_cols = -1, cap_rows = -1, mouse = 1;
+
+    /* 2.0 counts per pixel is 0.13 degrees per pixel with the engine's stock
+     * cvars: about a quarter turn across the middle of a 1000px window,
+     * which is close to how a real mouse on a desk feels. */
+    mc.sens = 2.0;
+    mc.edge = 0.15;
+    mc.turn = 220.0;
+    mc.invert = 0;
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
@@ -371,6 +495,16 @@ int main(int argc, char **argv)
             }
         } else if (!strncmp(a, "--frames=", 9)) {
             nframes = atoi(a + 9);
+        } else if (!strncmp(a, "--mouse-sens=", 13)) {
+            mc.sens = atof(a + 13);
+        } else if (!strncmp(a, "--mouse-edge=", 13)) {
+            mc.edge = atof(a + 13);
+        } else if (!strncmp(a, "--mouse-turn=", 13)) {
+            mc.turn = atof(a + 13);
+        } else if (!strcmp(a, "--mouse-invert")) {
+            mc.invert = 1;
+        } else if (!strcmp(a, "--no-mouse")) {
+            mouse = 0;
         } else if (!strcmp(a, "--no-sound")) {
             sound = 0;
         } else if (!strcmp(a, "--keytest")) {
@@ -403,7 +537,7 @@ int main(int argc, char **argv)
         return 1;
 
     if (keytest) {
-        rc = run_keytest();
+        rc = run_keytest(&cfg, mouse ? &mc : NULL);
         oq_term_shutdown();
         return rc;
     }
@@ -420,7 +554,7 @@ int main(int argc, char **argv)
         rc = run_demo(be, &cfg, nframes ? nframes : 600);
     } else {
         rc = run_game(be, &cfg, game, res, logpath, nframes, sound,
-                      fps, cap_cols, cap_rows);
+                      fps, cap_cols, cap_rows, mouse ? &mc : NULL);
     }
 
     be->shutdown();

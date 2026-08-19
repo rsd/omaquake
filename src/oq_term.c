@@ -27,6 +27,8 @@ static int termios_saved;
 static int alt_screen;
 static int kbd_pushed;
 static int has_key_release;
+static int mouse_on;
+static int text_px_w, text_px_h;
 static int last_cols, last_rows;
 
 volatile int oq_term_quit_requested;
@@ -123,19 +125,17 @@ void oq_term_present(const char *s, size_t len)
     write_all_n(out, o);
 }
 
-/* Query the terminal's current kitty-keyboard flags.  Returns the flag word,
- * or -1 if the terminal did not answer (protocol unsupported).
+/* Send a query and collect the terminal's reply into buf (NUL-terminated).
  *
  * A Primary Device Attributes request is appended as a sentinel: every
- * terminal answers DA, so once the DA reply arrives we know the flags reply
- * is either already in hand or never coming. */
-static int query_kitty_flags(void)
+ * terminal answers DA, so once the DA reply arrives we know the reply we
+ * actually wanted is either already in hand or never coming. */
+static void probe(const char *req, char *buf, size_t cap)
 {
-    char buf[256];
     size_t used = 0;
-    const char *p;
 
-    write_all("\033[?u\033[c");
+    write_all(req);
+    write_all("\033[c");
 
     for (;;) {
         struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
@@ -143,17 +143,26 @@ static int query_kitty_flags(void)
 
         if (poll(&pfd, 1, 200) <= 0)
             break;
-        n = read(STDIN_FILENO, buf + used, sizeof(buf) - 1 - used);
+        n = read(STDIN_FILENO, buf + used, cap - 1 - used);
         if (n <= 0)
             break;
         used += (size_t)n;
-        buf[used] = '\0';
         if (memchr(buf, 'c', used))
             break;
-        if (used >= sizeof(buf) - 1)
+        if (used >= cap - 1)
             break;
     }
     buf[used] = '\0';
+}
+
+/* Query the terminal's current kitty-keyboard flags.  Returns the flag word,
+ * or -1 if the terminal did not answer (protocol unsupported). */
+static int query_kitty_flags(void)
+{
+    char buf[256];
+    const char *p;
+
+    probe("\033[?u", buf, sizeof(buf));
 
     /* A flags reply is CSI ? <digits> u.  The DA reply also starts CSI ?
      * but ends in 'c', so require the 'u' terminator. */
@@ -171,6 +180,63 @@ static int query_kitty_flags(void)
         p = q;
     }
     return -1;
+}
+
+/* Ask for the text area in pixels (CSI 14 t -> CSI 4 ; height ; width t).
+ *
+ * This is what makes pointer look possible: SGR-pixel mouse reports are in
+ * exactly this coordinate space (it excludes the window padding), so the
+ * reply gives us the centre to measure deltas against and the edges to
+ * place the steering bands at. */
+static void query_text_pixels(void)
+{
+    char buf[256];
+    const char *p = buf;
+
+    probe("\033[14t", buf, sizeof(buf));
+
+    while ((p = strstr(p, "\033[4;")) != NULL) {
+        int h = 0, w = 0;
+
+        if (sscanf(p + 4, "%d;%dt", &h, &w) == 2 && w > 0 && h > 0) {
+            text_px_w = w;
+            text_px_h = h;
+            return;
+        }
+        p += 4;
+    }
+}
+
+int oq_term_text_pixels(int *w, int *h)
+{
+    if (text_px_w <= 0 || text_px_h <= 0)
+        return -1;
+    *w = text_px_w;
+    *h = text_px_h;
+    return 0;
+}
+
+void oq_term_mouse_enable(void)
+{
+    if (mouse_on)
+        return;
+    /* 1003 reports every pointer motion, not just drags, so looking around
+     * needs no button held.  1016 is not a nicety: motion reports are
+     * coalesced to one per cell crossing in every other encoding, which is
+     * an aiming resolution of one character -- and it is only in SGR-pixel
+     * mode that the terminal skips that coalescing and reports pixels. */
+    write_all("\033[?1003h"        /* report every motion, not just drags */
+              "\033[?1016h"        /* ...in pixels, uncoalesced           */
+              "\033[?1004h");      /* tell us when we lose focus          */
+    mouse_on = 1;
+}
+
+void oq_term_mouse_disable(void)
+{
+    if (!mouse_on)
+        return;
+    write_all("\033[?1004l\033[?1016l\033[?1003l");
+    mouse_on = 0;
 }
 
 int oq_term_init(void)
@@ -229,11 +295,17 @@ int oq_term_init(void)
             kbd_pushed = 0;
         }
     }
+
+    /* Probe now, while stdin is still ours: once the game loop starts the
+     * input parser owns it and a reply arriving mid-game would be decoded
+     * as keystrokes. */
+    query_text_pixels();
     return 0;
 }
 
 void oq_term_shutdown(void)
 {
+    oq_term_mouse_disable();
     if (kbd_pushed) {
         write_all("\033[<u");   /* pop keyboard flags */
         kbd_pushed = 0;

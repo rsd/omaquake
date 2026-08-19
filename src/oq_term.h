@@ -34,6 +34,23 @@ int  oq_term_size(int *cols, int *rows);
  * must synthesise releases. */
 int  oq_term_has_key_release(void);
 
+/* Start/stop any-motion pointer reporting in pixel coordinates.
+ *
+ * Both write to the terminal, so they may only be called while the render
+ * thread is not running -- i.e. around the game loop, never inside it.
+ * Disable is idempotent and also runs from oq_term_shutdown(). */
+void oq_term_mouse_enable(void);
+void oq_term_mouse_disable(void);
+
+/* Pixel size of the text area, as reported by CSI 14 t at init.  Returns 0
+ * on success, -1 if the terminal never answered.
+ *
+ * Cached deliberately: a re-query is a write to the terminal plus a read
+ * from stdin, and once the game loop is up the render thread owns stdout
+ * and the input parser owns stdin.  Callers that need the size after a
+ * resize scale these numbers by the change in cell count instead. */
+int  oq_term_text_pixels(int *w, int *h);
+
 /* Set by SIGINT/SIGTERM handlers. */
 extern volatile int oq_term_quit_requested;
 
