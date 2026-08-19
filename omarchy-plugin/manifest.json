@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "raul.omaquake",
+  "name": "OmaQuake",
+  "version": "0.1.0",
+  "author": "Raul Dias",
+  "description": "Quake 1 as characters, in a real terminal behind a bar popout",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaQuake",
+    "description": "Drop-down Quake, rendered as text in a real terminal",
+    "category": "Fun",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
