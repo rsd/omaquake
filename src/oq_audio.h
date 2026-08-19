@@ -10,8 +10,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Opens the device at the core's rate.  Returns 0 on success; on failure
- * the caller should log oq_audio_error() and carry on without sound. */
+/* Opens the device at the core's rate.  The PCM name comes from
+ * OMAQUAKE_ALSA_DEVICE if set, else "default"; point it at "null" to run
+ * the whole audio path silently.  Returns 0 on success; on failure the
+ * caller should log oq_audio_error() and carry on without sound. */
 int oq_audio_init(int sample_rate);
 void oq_audio_shutdown(void);
 
@@ -21,6 +23,9 @@ void oq_audio_write(const int16_t *frames, size_t nframes);
 
 /* Reason the last call failed, for the caller's log file.  Never NULL. */
 const char *oq_audio_error(void);
+/* PCM name actually opened -- worth logging now that the environment can
+ * redirect it.  NULL when no device is open. */
+const char *oq_audio_device(void);
 /* Frames dropped since init.  A steadily climbing count means the loop is
  * feeding faster than the device drains -- worth having in the log. */
 unsigned long oq_audio_dropped(void);

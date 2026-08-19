@@ -20,13 +20,18 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-/* Deep enough to ride out the loop's own jitter (~14 ms of audio arrives
- * per frame at the core's 72 fps), shallow enough that gunfire is not
- * noticeably late against the muzzle flash. */
+/* Deep enough to ride out the loop's own jitter (the core hands us one video
+ * frame of audio at a time -- 735 frames, ~17 ms, at 44.1 kHz / 60 fps),
+ * shallow enough that gunfire is not noticeably late against the muzzle
+ * flash.  Measured drop rates at 40 ms and 160 ms are the same, because what
+ * actually overflows the buffer is a loop stall (a level load), not buffer
+ * depth -- so this sits in the middle of a flat curve. */
 #define OQ_AUDIO_LATENCY_US 80000
 
 static snd_pcm_t *pcm;
+static const char *pcm_name;
 static unsigned long dropped;
 static char errbuf[160];
 
@@ -45,6 +50,7 @@ static void oq_alsa_silent(const char *file, int line, const char *fn,
 
 int oq_audio_init(int sample_rate)
 {
+    const char *dev;
     int err;
 
     if (pcm)
@@ -56,11 +62,18 @@ int oq_audio_init(int sample_rate)
 
     snd_lib_error_set_handler(oq_alsa_silent);
 
-    err = snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK,
-                       SND_PCM_NONBLOCK);
+    /* An automated run has to be able to exercise this path without making
+     * noise on whatever machine it lands on: OMAQUAKE_ALSA_DEVICE=null
+     * points at ALSA's built-in bit bucket. */
+    dev = getenv("OMAQUAKE_ALSA_DEVICE");
+    if (!dev || !*dev)
+        dev = "default";
+
+    err = snd_pcm_open(&pcm, dev, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
     if (err < 0) {
         pcm = NULL;
-        set_error("snd_pcm_open", err);
+        snprintf(errbuf, sizeof(errbuf), "snd_pcm_open(%s): %s", dev,
+                 snd_strerror(err));
         return -1;
     }
 
@@ -76,6 +89,7 @@ int oq_audio_init(int sample_rate)
         return -1;
     }
 
+    pcm_name = dev;
     dropped = 0;
     return 0;
 }
@@ -120,6 +134,7 @@ void oq_audio_shutdown(void)
     snd_pcm_drop(pcm);
     snd_pcm_close(pcm);
     pcm = NULL;
+    pcm_name = NULL;
 }
 
 #else /* !OQ_HAVE_ALSA */
@@ -147,6 +162,15 @@ const char *oq_audio_error(void)
     return errbuf[0] ? errbuf : "no error";
 #else
     return "built without ALSA support";
+#endif
+}
+
+const char *oq_audio_device(void)
+{
+#ifdef OQ_HAVE_ALSA
+    return pcm_name;
+#else
+    return NULL;
 #endif
 }
 

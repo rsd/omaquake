@@ -220,6 +220,18 @@ static void emit(unsigned keycode, int down, uint16_t mods,
                 key_name(keycode), down ? "DOWN" : "UP", mods);
     if (keycode == RETROK_UNKNOWN)
         return;
+
+    /* Quit has to be recognised from the DECODED event, not from a raw
+     * control byte.  Under the kitty protocol every key arrives as an escape
+     * sequence -- Ctrl-\ comes through as CSI 92;5u and the 0x1c byte never
+     * appears -- so a raw-byte test silently stops working the moment the
+     * protocol is active. */
+    if (down && (keycode == RETROK_F10 ||
+                 ((mods & RETROKMOD_CTRL) &&
+                  (keycode == RETROK_BACKSLASH || keycode == RETROK_q)))) {
+        quit_requested = 1;
+        return;
+    }
     if (kitty_mode)
         fn(keycode, down, mods, ud);
     else if (down)
@@ -370,7 +382,7 @@ void oq_input_poll(oq_key_fn fn, void *ud)
         }
         if (c == 0x1b && i + 1 < buflen && buf[i + 1] == 'O')
             break;                  /* incomplete SS3 */
-        if (c == 0x1c) {            /* Ctrl-\ : escape hatch out of the game */
+        if (c == 0x1c) {            /* Ctrl-\ as a raw byte: legacy path only */
             quit_requested = 1;
             i++;
             continue;

@@ -28,6 +28,7 @@ static void usage(const char *argv0)
         "  --cell=WxH       character cell pixel size (default 10x20)\n"
         "  --res=WxH        engine render resolution (default 320x200)\n"
         "  --log=PATH       write the engine log here (never to stdout)\n"
+        "  --no-sound       do not open the audio device\n"
         "  --help\n",
         argv0, oq_present_available());
 }
@@ -122,7 +123,7 @@ static int run_keytest(void)
 
     n = snprintf(hdr, sizeof(hdr),
                  "key-release: %s\r\n"
-                 "press keys (arrows, Enter, W, Ctrl); Ctrl-\\ quits\r\n\r\n",
+                 "press keys (arrows, Enter, W, Ctrl); Ctrl-Q, Ctrl-\\ or F10 quits\r\n\r\n",
                  oq_term_has_key_release()
                      ? "YES - kitty keyboard protocol active"
                      : "NO - press-only fallback, holds are synthesised");
@@ -176,7 +177,7 @@ static int64_t now_ns(void)
 
 static int run_game(const oq_present_backend *be, oq_present_config *cfg,
                     const char *pak, const char *res, const char *logpath,
-                    int nframes)
+                    int nframes, int sound)
 {
     struct sink_ctx ctx = { be, cfg };
     oq_retro_config rc;
@@ -189,6 +190,7 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     rc.samplerate = "auto";
     rc.save_dir = ".";
     rc.log_path = logpath;
+    rc.sound = sound;
     rc.sink = video_sink;
     rc.sink_ud = &ctx;
 
@@ -235,7 +237,7 @@ int main(int argc, char **argv)
     const char *logpath = NULL;
     const oq_present_backend *be;
     oq_present_config cfg;
-    int demo = 0, keytest = 0, nframes = 0, i, rc;
+    int demo = 0, keytest = 0, nframes = 0, sound = 1, i, rc;
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
@@ -269,6 +271,8 @@ int main(int argc, char **argv)
             }
         } else if (!strncmp(a, "--frames=", 9)) {
             nframes = atoi(a + 9);
+        } else if (!strcmp(a, "--no-sound")) {
+            sound = 0;
         } else if (!strcmp(a, "--keytest")) {
             keytest = 1;
         } else if (!strcmp(a, "--demo")) {
@@ -315,7 +319,7 @@ int main(int argc, char **argv)
     if (demo) {
         rc = run_demo(be, &cfg, nframes ? nframes : 600);
     } else {
-        rc = run_game(be, &cfg, game, res, logpath, nframes);
+        rc = run_game(be, &cfg, game, res, logpath, nframes, sound);
     }
 
     be->shutdown();

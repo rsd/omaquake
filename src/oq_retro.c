@@ -242,6 +242,9 @@ int oq_retro_init(const oq_retro_config *cfg, const char *pak_path)
     if (conf.sound) {
         if (oq_audio_init((int)av.timing.sample_rate) == 0) {
             audio_on = 1;
+            if (logfp)
+                fprintf(logfp, "audio: %d Hz on '%s'\n",
+                        (int)av.timing.sample_rate, oq_audio_device());
         } else if (logfp) {
             fprintf(logfp, "audio: disabled (%s)\n", oq_audio_error());
             fflush(logfp);

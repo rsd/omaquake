@@ -14,7 +14,7 @@ TYRQUAKE    := third_party/tyrquake
 TYRQUAKE_A  := $(TYRQUAKE)/tyrquake_libretro_unix.a
 
 SRC         := src/oq_main.c src/oq_present.c src/oq_term.c \
-               src/oq_input.c src/oq_retro.c
+               src/oq_input.c src/oq_retro.c src/oq_audio.c
 
 # With STATIC_LINKING=1 the core deliberately drops libretro-common (see
 # tyrquake/Makefile.common:119) and expects the frontend to provide it.
@@ -38,6 +38,7 @@ LDLIBS      += -lm
 # Backends are optional: build whichever libraries are present.
 HAVE_CHAFA  := $(shell $(PKG_CONFIG) --exists chafa && echo 1)
 HAVE_CACA   := $(shell $(PKG_CONFIG) --exists caca && echo 1)
+HAVE_ALSA   := $(shell $(PKG_CONFIG) --exists alsa && echo 1)
 
 ifeq ($(HAVE_CHAFA),1)
   SRC      += src/oq_chafa.c
@@ -49,6 +50,12 @@ ifeq ($(HAVE_CACA),1)
   CPPFLAGS += -DOQ_HAVE_CACA $(shell $(PKG_CONFIG) --cflags caca)
   LDLIBS   += $(shell $(PKG_CONFIG) --libs caca)
 endif
+# Audio is one sink rather than a choice of backends, so src/oq_audio.c is
+# always compiled and stubs itself out; only the flags are conditional.
+ifeq ($(HAVE_ALSA),1)
+  CPPFLAGS += -DOQ_HAVE_ALSA $(shell $(PKG_CONFIG) --cflags alsa)
+  LDLIBS   += $(shell $(PKG_CONFIG) --libs alsa)
+endif
 
 OBJ         := $(SRC:src/%.c=$(BUILD)/%.o) $(LRC_OBJ)
 
@@ -57,13 +64,15 @@ OBJ         := $(SRC:src/%.c=$(BUILD)/%.o) $(LRC_OBJ)
 # objects behind and the binary silently lacks it.
 FLAGS_STAMP := $(BUILD)/.flags
 
-.PHONY: all clean engine install backends
+.DEFAULT_GOAL := all
+.PHONY: all clean engine install backends FORCE
 .DELETE_ON_ERROR:
 all: $(BIN)
 
 backends:
 	@echo "chafa: $(if $(HAVE_CHAFA),yes,NO - install 'chafa')"
 	@echo "caca:  $(if $(HAVE_CACA),yes,NO - install 'libcaca')"
+	@echo "alsa:  $(if $(HAVE_ALSA),yes,NO - install 'alsa-lib'; sound off)"
 
 $(BIN): $(OBJ) $(TYRQUAKE_A) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(TYRQUAKE_A) $(LDLIBS)
@@ -77,7 +86,7 @@ $(BUILD)/lrc/%.o: $(LRC)/%.c | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -w -I$(LRC)/include -c -o $@ $<
 
-$(FLAGS_STAMP): | $(BUILD)
+$(FLAGS_STAMP): FORCE | $(BUILD)
 	@echo '$(CC) $(CFLAGS) $(CPPFLAGS) $(LDLIBS)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
@@ -96,3 +105,10 @@ clean:
 
 install: $(BIN)
 	install -Dm755 $(BIN) $(DESTDIR)$(PREFIX)/bin/omaquake
+
+# An always-out-of-date prerequisite. FLAGS_STAMP needs this because an
+# order-only prerequisite alone never re-runs the recipe: once build/.flags
+# exists make considers it final, the stamp goes stale, and the flag-change
+# detection it exists for stops working. Keep this rule LAST -- defined before
+# `all` it becomes the default goal and `make` silently builds nothing.
+FORCE:
