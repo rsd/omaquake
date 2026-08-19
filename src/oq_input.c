@@ -14,6 +14,8 @@
 #include "oq_input.h"
 
 #include <libretro.h>
+
+#include <stdio.h>
 #include <poll.h>
 #include <string.h>
 #include <time.h>
@@ -25,6 +27,7 @@
 #define MAX_HOLDS 16
 
 static int kitty_mode;
+static FILE *trace;
 static int quit_requested;
 static unsigned char buf[1024];
 static size_t buflen;
@@ -41,6 +44,36 @@ static int64_t now_ms(void)
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+void oq_input_set_trace(FILE *fp)
+{
+    trace = fp;
+}
+
+static const char *key_name(unsigned kc)
+{
+    static char buf[32];
+
+    switch (kc) {
+    case RETROK_UP:     return "UP";
+    case RETROK_DOWN:   return "DOWN";
+    case RETROK_LEFT:   return "LEFT";
+    case RETROK_RIGHT:  return "RIGHT";
+    case RETROK_RETURN: return "ENTER";
+    case RETROK_ESCAPE: return "ESCAPE";
+    case RETROK_SPACE:  return "SPACE";
+    case RETROK_TAB:    return "TAB";
+    case RETROK_LCTRL:  return "LCTRL";
+    case RETROK_LSHIFT: return "LSHIFT";
+    case RETROK_LALT:   return "LALT";
+    }
+    if (kc >= RETROK_a && kc <= RETROK_z) {
+        snprintf(buf, sizeof(buf), "%c", 'a' + (int)(kc - RETROK_a));
+        return buf;
+    }
+    snprintf(buf, sizeof(buf), "keycode:%u", kc);
+    return buf;
 }
 
 void oq_input_init(int has_key_release)
@@ -181,6 +214,9 @@ void oq_input_expire(oq_key_fn fn, void *ud)
 static void emit(unsigned keycode, int down, uint16_t mods,
                  oq_key_fn fn, void *ud)
 {
+    if (trace)
+        fprintf(trace, "  -> %-12s %-5s mods=0x%04x\r\n",
+                key_name(keycode), down ? "DOWN" : "UP", mods);
     if (keycode == RETROK_UNKNOWN)
         return;
     if (kitty_mode)
@@ -269,6 +305,17 @@ void oq_input_poll(oq_key_fn fn, void *ud)
         buflen += (size_t)n;
     }
 
+    if (trace && buflen) {
+        size_t k;
+
+        fprintf(trace, "raw:");
+        for (k = 0; k < buflen; k++)
+            fprintf(trace, " %02x(%c)", buf[k],
+                    buf[k] >= 32 && buf[k] < 127 ? buf[k] : '.');
+        fprintf(trace, "\r\n");
+        fflush(trace);
+    }
+
     i = 0;
     while (i < buflen) {
         unsigned char c = buf[i];
@@ -282,12 +329,27 @@ void oq_input_poll(oq_key_fn fn, void *ud)
             continue;
         }
         if (c == 0x1b && i + 1 >= buflen) {
-            /* A bare ESC may be the start of a sequence still in flight, but
-             * with nothing behind it we have to call it the Escape key. */
+            /* A bare ESC is nearly always the head of a sequence that has
+             * not fully arrived.  Under the kitty protocol Escape itself
+             * comes through as CSI 27 u, so a lone ESC is NEVER the Escape
+             * key there -- treating it as one fires a spurious menu-back on
+             * every split read. */
+            if (kitty_mode)
+                break;
             emit(RETROK_ESCAPE, 1, 0, fn, ud);
             i++;
             continue;
         }
+        if (c == 0x1b && i + 2 < buflen && buf[i + 1] == 'O') {
+            /* SS3: what a legacy terminal sends for the arrows and F1-F4
+             * when it is in application cursor mode.  Without this the
+             * arrows fall through and get misread as Escape. */
+            emit(map_final(buf[i + 2]), 1, 0, fn, ud);
+            i += 3;
+            continue;
+        }
+        if (c == 0x1b && i + 1 < buflen && buf[i + 1] == 'O')
+            break;                  /* incomplete SS3 */
         if (c == 0x1c) {            /* Ctrl-\ : escape hatch out of the game */
             quit_requested = 1;
             i++;

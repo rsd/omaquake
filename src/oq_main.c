@@ -23,6 +23,7 @@ static void usage(const char *argv0)
         "  --symbols=SET    ascii | block | fine        (default: fine)\n"
         "  --color=DEPTH    mono | 16 | 256 | true      (default: true)\n"
         "  --demo           render a test pattern instead of the game\n"
+        "  --keytest        show decoded key events; diagnoses input problems\n"
         "  --frames=N       stop after N frames (demo/benchmark)\n"
         "  --cell=WxH       character cell pixel size (default 10x20)\n"
         "  --res=WxH        engine render resolution (default 320x200)\n"
@@ -101,6 +102,43 @@ static int run_demo(const oq_present_backend *be, oq_present_config *cfg,
     return 0;
 }
 
+
+
+/* Prints what the terminal actually sends and what we decode it to.  When a
+ * key does not work in game, this says whether the bytes never arrived, or
+ * arrived and were decoded wrong. */
+static void keytest_sink(unsigned keycode, int down, uint16_t mods, void *ud)
+{
+    (void)keycode; (void)down; (void)mods; (void)ud;
+}
+
+static int run_keytest(void)
+{
+    char hdr[256];
+    int n;
+
+    oq_input_init(oq_term_has_key_release());
+    oq_input_set_trace(stdout);
+
+    n = snprintf(hdr, sizeof(hdr),
+                 "key-release: %s\r\n"
+                 "press keys (arrows, Enter, W, Ctrl); Ctrl-\\ quits\r\n\r\n",
+                 oq_term_has_key_release()
+                     ? "YES - kitty keyboard protocol active"
+                     : "NO - press-only fallback, holds are synthesised");
+    fwrite(hdr, 1, (size_t)n, stdout);
+    fflush(stdout);
+
+    while (!oq_term_quit_requested && !oq_input_quit()) {
+        struct timespec ts = { 0, 20 * 1000 * 1000 };
+
+        oq_input_poll(keytest_sink, NULL);
+        oq_input_expire(keytest_sink, NULL);
+        fflush(stdout);
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
 
 /* ---- game loop ------------------------------------------------------ */
 
@@ -197,7 +235,7 @@ int main(int argc, char **argv)
     const char *logpath = NULL;
     const oq_present_backend *be;
     oq_present_config cfg;
-    int demo = 0, nframes = 0, i, rc;
+    int demo = 0, keytest = 0, nframes = 0, i, rc;
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
@@ -231,6 +269,8 @@ int main(int argc, char **argv)
             }
         } else if (!strncmp(a, "--frames=", 9)) {
             nframes = atoi(a + 9);
+        } else if (!strcmp(a, "--keytest")) {
+            keytest = 1;
         } else if (!strcmp(a, "--demo")) {
             demo = 1;
         } else if (!strcmp(a, "--help")) {
@@ -250,13 +290,20 @@ int main(int argc, char **argv)
                 video, oq_present_available());
         return 2;
     }
-    if (!demo && !game) {
+    if (!demo && !keytest && !game) {
         usage(argv[0]);
         return 2;
     }
 
     if (oq_term_init())
         return 1;
+
+    if (keytest) {
+        rc = run_keytest();
+        oq_term_shutdown();
+        return rc;
+    }
+
     oq_term_size(&cfg.cols, &cfg.rows);
 
     if (be->init(&cfg)) {
