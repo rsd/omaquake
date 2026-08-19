@@ -7,6 +7,7 @@
  * ourselves -- the same shape as the chafa backend.
  */
 #include "oq_present.h"
+#include "oq_term.h"
 
 #include <caca.h>
 #include <stdio.h>
@@ -117,9 +118,7 @@ static void caca_frame(const uint8_t *src, int w, int h, int stride)
     while (len && (out[len - 1] == '\n' || out[len - 1] == '\r'))
         len--;
 
-    fputs("\033[H", stdout);
-    fwrite(out, 1, len, stdout);
-    fflush(stdout);
+    oq_term_present(out, len);
     free(out);
 }
 

@@ -37,9 +37,8 @@ static void on_signal(int sig)
     oq_term_quit_requested = 1;
 }
 
-static void write_all(const char *s)
+static void write_all_n(const char *s, size_t len)
 {
-    size_t len = strlen(s);
     ssize_t n;
 
     while (len) {
@@ -52,6 +51,38 @@ static void write_all(const char *s)
         s += n;
         len -= (size_t)n;
     }
+}
+
+static void write_all(const char *s)
+{
+    write_all_n(s, strlen(s));
+}
+
+void oq_term_present(const char *s, size_t len)
+{
+    static char *out;
+    static size_t cap;
+    size_t need = len * 2 + 8;
+    size_t i, o = 0;
+
+    if (cap < need) {
+        char *p = realloc(out, need);
+
+        if (!p)
+            return;
+        out = p;
+        cap = need;
+    }
+
+    out[o++] = '\033';
+    out[o++] = '[';
+    out[o++] = 'H';
+    for (i = 0; i < len; i++) {
+        if (s[i] == '\n')
+            out[o++] = '\r';
+        out[o++] = s[i];
+    }
+    write_all_n(out, o);
 }
 
 /* Ask the terminal for its kitty-keyboard flags, then send a Primary Device
@@ -139,9 +170,12 @@ int oq_term_init(void)
         kbd_pushed = 1;
     }
 
-    write_all("\033[?1049h"     /* alternate screen  */
-              "\033[?25l"       /* hide cursor       */
-              "\033[2J");       /* clear             */
+    write_all("\033[?1049h"     /* alternate screen        */
+              "\033[?25l"       /* hide cursor             */
+              "\033[?7l"        /* no autowrap: a glyph in */
+                                 /* the last column must not */
+                                 /* wrap and scroll          */
+              "\033[2J");       /* clear                   */
     alt_screen = 1;
     return 0;
 }
@@ -153,7 +187,7 @@ void oq_term_shutdown(void)
         kbd_pushed = 0;
     }
     if (alt_screen) {
-        write_all("\033[?25h\033[0m\033[?1049l");
+        write_all("\033[?7h\033[?25h\033[0m\033[?1049l");
         alt_screen = 0;
     }
     if (termios_saved) {

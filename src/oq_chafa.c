@@ -5,6 +5,7 @@
  * have a pure-ASCII picture in 24-bit colour, which libcaca cannot do.
  */
 #include "oq_present.h"
+#include "oq_term.h"
 
 #include <chafa.h>
 #include <stdio.h>
@@ -121,9 +122,7 @@ static void chafa_be_frame(const uint8_t *src, int w, int h, int stride)
                        gs->str[gs->len - 1] == '\r'))
         g_string_truncate(gs, gs->len - 1);
 
-    fputs("\033[H", stdout);
-    fwrite(gs->str, 1, gs->len, stdout);
-    fflush(stdout);
+    oq_term_present(gs->str, gs->len);
     g_string_free(gs, TRUE);
 }
 
