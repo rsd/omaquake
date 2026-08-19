@@ -16,6 +16,11 @@
  * not switched between: the 1:1 term dies away on its own as the pointer
  * runs out of room, and the rate term is already carrying the turn by the
  * time it does.
+ *
+ * All of that is a workaround for absolute positions, and it applies only
+ * to the terminal source.  Fed by evdev (oq_evdev.h) the deltas are already
+ * relative and unbounded, config.relative switches the band off, and what
+ * is left is plain 1:1 aiming.
  */
 typedef struct {
     double sens;    /* pointer pixels -> mouse counts; 1.0 is the engine's
@@ -23,6 +28,11 @@ typedef struct {
     double edge;    /* fraction of each side that steers; 0 disables */
     double turn;    /* steering rate at the outermost edge, degrees/sec */
     int    invert;  /* invert pitch */
+    /* The source reports relative motion (evdev), not a position.  That
+     * motion is unbounded -- there is no window edge to run out of -- so
+     * the steering band above has nothing to fix and is switched off
+     * entirely: edge and turn are ignored, and aiming is plain 1:1. */
+    int    relative;
 } oq_mouse_config;
 
 void oq_mouse_init(const oq_mouse_config *cfg);
@@ -31,8 +41,15 @@ void oq_mouse_init(const oq_mouse_config *cfg);
 void oq_mouse_set_extent(int w, int h);
 
 /* An absolute pointer position from the terminal.  May be outside the
- * extent; a terminal keeps reporting during a drag past the window edge. */
+ * extent; a terminal keeps reporting during a drag past the window edge.
+ * Terminal source only. */
 void oq_mouse_track(int x, int y);
+
+/* Relative motion in device counts, already known to be a delta.  evdev
+ * source only; nothing here needs the extent or the resync guard, because
+ * a delta cannot be mis-associated with a previous position the way two
+ * absolute reports either side of a gap can. */
+void oq_mouse_move(int dx, int dy);
 
 /* Stop and resync -- used when the terminal loses focus, where reports stop
  * arriving and the last known position would otherwise steer forever. */

@@ -14,8 +14,8 @@ TYRQUAKE    := third_party/tyrquake
 TYRQUAKE_A  := $(TYRQUAKE)/tyrquake_libretro_unix.a
 
 SRC         := src/oq_main.c src/oq_present.c src/oq_term.c \
-               src/oq_input.c src/oq_mouse.c src/oq_retro.c \
-               src/oq_render.c src/oq_audio.c
+               src/oq_input.c src/oq_mouse.c src/oq_evdev.c \
+               src/oq_retro.c src/oq_render.c src/oq_audio.c
 
 # With STATIC_LINKING=1 the core deliberately drops libretro-common (see
 # tyrquake/Makefile.common:119) and expects the frontend to provide it.
@@ -67,7 +67,7 @@ OBJ         := $(SRC:src/%.c=$(BUILD)/%.o) $(LRC_OBJ)
 FLAGS_STAMP := $(BUILD)/.flags
 
 .DEFAULT_GOAL := all
-.PHONY: all clean engine install backends FORCE
+.PHONY: all clean engine install backends test FORCE
 .DELETE_ON_ERROR:
 all: $(BIN)
 
@@ -95,6 +95,17 @@ $(FLAGS_STAMP): FORCE | $(BUILD)
 
 $(BUILD):
 	@mkdir -p $(BUILD)
+
+# The evdev pointer detector is the one piece here that can do real harm if
+# it is wrong -- reading a keyboard event device is keylogging -- so it gets
+# a test.  Needs no engine and no backends; it builds the module directly.
+TEST_BIN := $(BUILD)/oq_evdev_test
+
+test: $(TEST_BIN)
+	$(TEST_BIN)
+
+$(TEST_BIN): tests/oq_evdev_test.c src/oq_evdev.c src/oq_evdev.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/oq_evdev_test.c src/oq_evdev.c
 
 engine: $(TYRQUAKE_A)
 

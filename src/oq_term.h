@@ -34,13 +34,21 @@ int  oq_term_size(int *cols, int *rows);
  * must synthesise releases. */
 int  oq_term_has_key_release(void);
 
-/* Start/stop any-motion pointer reporting in pixel coordinates.
+/* Start/stop any-motion pointer reporting in pixel coordinates (plus focus
+ * reporting, which enable turns on as well).
  *
  * Both write to the terminal, so they may only be called while the render
  * thread is not running -- i.e. around the game loop, never inside it.
- * Disable is idempotent and also runs from oq_term_shutdown(). */
+ * Disable is idempotent, covers whichever of the two was enabled, and also
+ * runs from oq_term_shutdown(). */
 void oq_term_mouse_enable(void);
 void oq_term_mouse_disable(void);
+
+/* Focus reporting (mode 1004) on its own.  The evdev pointer source wants
+ * this without 1003/1016: it still has to know when the terminal goes to
+ * the background, or motion arriving while the player is in another window
+ * turns the view.  Same threading rule as above. */
+void oq_term_focus_enable(void);
 
 /* Pixel size of the text area, as reported by CSI 14 t at init.  Returns 0
  * on success, -1 if the terminal never answered.

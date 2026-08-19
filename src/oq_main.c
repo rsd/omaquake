@@ -1,4 +1,5 @@
 /* OmaQuake -- Quake rendered as characters in a terminal. */
+#include "oq_evdev.h"
 #include "oq_input.h"
 #include "oq_mouse.h"
 #include "oq_present.h"
@@ -33,11 +34,20 @@ static void usage(const char *argv0)
         "  --cells=WxH      cap the canvas; 0x0 fills the terminal\n"
         "  --log=PATH       write the engine log here (never to stdout)\n"
         "  --no-sound       do not open the audio device\n"
-        "  --no-mouse       do not take over the pointer\n"
+        "  --mouse=SRC      evdev | term | none | auto  (default: auto --\n"
+        "                   evdev when a pointer can be opened and grabbed,\n"
+        "                   otherwise the terminal's own reporting)\n"
+        "  --mouse-dev=PATH use this evdev node instead of auto-detecting\n"
+        "  --mouse-list     list /dev/input/event* and why each was taken or\n"
+        "                   rejected, then exit\n"
+        "  --no-mouse       do not take over the pointer (same as --mouse=none)\n"
         "  --mouse-sens=F   pointer sensitivity (default 2.0)\n"
         "  --mouse-edge=F   steering band, fraction of each side (default 0.15,\n"
-        "                   0 turns steering off and leaves plain 1:1 look)\n"
-        "  --mouse-turn=F   steering rate at the edge, deg/sec (default 220)\n"
+        "                   0 turns steering off and leaves plain 1:1 look).\n"
+        "                   Terminal source only: evdev reports unbounded\n"
+        "                   deltas, which have no edge to steer away from\n"
+        "  --mouse-turn=F   steering rate at the edge, deg/sec (default 220);\n"
+        "                   terminal source only, as above\n"
         "  --mouse-invert   invert pitch\n"
         "  --help\n",
         argv0, oq_present_available());
@@ -57,6 +67,20 @@ static int parse_color(const char *s, oq_color *out)
     if (!strcmp(s, "16"))   { *out = OQ_COLOR_16;   return 0; }
     if (!strcmp(s, "256"))  { *out = OQ_COLOR_256;  return 0; }
     if (!strcmp(s, "true")) { *out = OQ_COLOR_TRUE; return 0; }
+    return -1;
+}
+
+/* Where pointer motion comes from.  auto prefers evdev and falls back to
+ * the terminal, which is the only source that exists on a machine without
+ * readable /dev/input nodes. */
+enum { MOUSE_AUTO, MOUSE_EVDEV, MOUSE_TERM, MOUSE_NONE };
+
+static int parse_mouse(const char *s, int *out)
+{
+    if (!strcmp(s, "auto"))  { *out = MOUSE_AUTO;  return 0; }
+    if (!strcmp(s, "evdev")) { *out = MOUSE_EVDEV; return 0; }
+    if (!strcmp(s, "term"))  { *out = MOUSE_TERM;  return 0; }
+    if (!strcmp(s, "none"))  { *out = MOUSE_NONE;  return 0; }
     return -1;
 }
 
@@ -117,6 +141,19 @@ static int run_demo(const oq_present_backend *be, oq_present_config *cfg,
 
 /* ---- pointer ---------------------------------------------------------- */
 
+/* Which source is live.  Decided before the terminal is touched and then
+ * confirmed when the grab is taken, because either step can fail. */
+enum { PSRC_NONE, PSRC_TERM, PSRC_EVDEV };
+static int pointer_src = PSRC_NONE;
+/* The user asked for evdev by name, or named a device: failing over to the
+ * terminal would then be a silent substitution of something they did not
+ * ask for, so it is an error instead. */
+static int pointer_required;
+/* Reported to --log and, once the terminal is back, to stderr.  Neither
+ * channel is available at the moment the choice is made: stdout is the
+ * picture and the log file is not opened until the core starts. */
+static char pointer_note[512];
+
 /* Pixels per character cell, so the size of the text area can be recomputed
  * after a resize without asking the terminal again -- that would be a write
  * to the terminal from the wrong thread once the game is running. */
@@ -137,6 +174,93 @@ static void mouse_calibrate(const oq_present_config *cfg, int cols, int rows)
     if (cell_px_h < 1) cell_px_h = cfg->cell_h > 0 ? cfg->cell_h : 20;
 
     oq_mouse_set_extent(cols * cell_px_w, rows * cell_px_h);
+}
+
+/* Pick the source.  Deliberately runs before oq_term_init(): opening an
+ * evdev node can fail, and that message belongs on a plain stderr rather
+ * than inside the alternate screen.  Nothing is grabbed here -- --demo and
+ * --keytest without a mouse must not take the pointer at all. */
+static int pointer_select(int mode, const char *dev)
+{
+    /* Said out loud rather than dropped: --mouse-dev only means anything to
+     * the evdev source, and an option that looks accepted and does nothing
+     * is the failure mode this codebase keeps running into. */
+    if (dev && (mode == MOUSE_TERM || mode == MOUSE_NONE))
+        fprintf(stderr, "omaquake: --mouse-dev names an evdev device and is"
+                        " ignored by --mouse=%s\n",
+                mode == MOUSE_TERM ? "term" : "none");
+
+    if (mode == MOUSE_NONE) {
+        pointer_src = PSRC_NONE;
+        return 0;
+    }
+    if (mode != MOUSE_TERM && oq_evdev_open(dev) == 0) {
+        pointer_src = PSRC_EVDEV;
+        return 0;
+    }
+    if (mode != MOUSE_TERM && pointer_required) {
+        fprintf(stderr, "omaquake: mouse: %s\n", oq_evdev_error());
+        return -1;
+    }
+    pointer_src = PSRC_TERM;
+    return 0;
+}
+
+/* Take the pointer for the duration of the loop: grab the device, or turn
+ * on the terminal's own reporting.  Returns -1 only when evdev was asked
+ * for by name and could not be grabbed; under --mouse=auto a failed grab
+ * quietly becomes the terminal source, which is the whole point of auto.
+ *
+ * Everything here writes to the terminal or to the log, so it must run
+ * before the render thread starts and takes stdout over. */
+static int pointer_start(const oq_mouse_config *mc, oq_present_config *cfg,
+                         int cols, int rows, int edge_given, int turn_given)
+{
+    oq_mouse_config c = *mc;
+
+    if (pointer_src == PSRC_EVDEV && oq_evdev_grab()) {
+        if (pointer_required) {
+            snprintf(pointer_note, sizeof(pointer_note),
+                     "could not grab the pointer: %s", oq_evdev_error());
+            return -1;
+        }
+        oq_evdev_close();
+        pointer_src = PSRC_TERM;
+    }
+    /* Unbounded deltas have no window edge to wall out at, so the steering
+     * band -- the entire reason the terminal path is a hybrid -- is off. */
+    c.relative = (pointer_src == PSRC_EVDEV);
+    oq_mouse_init(&c);
+    mouse_calibrate(cfg, cols, rows);
+
+    if (pointer_src == PSRC_EVDEV) {
+        /* Focus reporting only.  Having the terminal track and encode the
+         * same pointer the kernel is already handing us would be work on
+         * both ends for nothing; focus we still want, so that motion
+         * arriving while the player is in another window is discarded
+         * rather than turning the view. */
+        oq_term_focus_enable();
+        snprintf(pointer_note, sizeof(pointer_note),
+                 "evdev %s \"%s\", grabbed, 1:1 (no edge band)%s",
+                 oq_evdev_path(), oq_evdev_name(),
+                 (edge_given || turn_given)
+                     ? "; --mouse-edge/--mouse-turn do not apply to a"
+                       " relative source and are ignored" : "");
+    } else if (pointer_src == PSRC_TERM) {
+        oq_term_mouse_enable();
+        snprintf(pointer_note, sizeof(pointer_note),
+                 "terminal SGR-pixels (modes 1003/1016),"
+                 " edge band %.2f at %.0f deg/s", c.edge, c.turn);
+    }
+    return 0;
+}
+
+/* Buttons from the kernel take the same path as the terminal's: same
+ * OQ_MB_* numbering, so a bind in autoexec.cfg works either way. */
+static void evdev_button_sink(int button, int down, void *ud)
+{
+    (void)ud;
+    oq_retro_mouse_button(button, down);
 }
 
 /* Motion drives the view; buttons go through as MOUSE1..MOUSE7 so they can
@@ -160,6 +284,17 @@ static void mouse_frame(int *dx, int *dy)
     static int had_focus = 1;
     int focus = oq_input_focused();
 
+    if (pointer_src == PSRC_EVDEV) {
+        int rx, ry;
+
+        /* Drained even while in the background, so nothing queues up to
+         * arrive as one lurch on the way back -- but discarded there: the
+         * device is grabbed, so those events are still ours while the
+         * player is in another window and must not aim or fire. */
+        oq_evdev_poll(&rx, &ry, focus ? evdev_button_sink : NULL, NULL);
+        if (focus)
+            oq_mouse_move(rx, ry);
+    }
     if (focus != had_focus) {
         had_focus = focus;
         /* A button still held when the terminal loses focus never gets its
@@ -183,9 +318,10 @@ static void keytest_sink(unsigned keycode, int down, uint16_t mods, void *ud)
     (void)keycode; (void)down; (void)mods; (void)ud;
 }
 
-static int run_keytest(oq_present_config *cfg, const oq_mouse_config *mc)
+static int run_keytest(oq_present_config *cfg, const oq_mouse_config *mc,
+                       int edge_given, int turn_given)
 {
-    char hdr[512];
+    char hdr[768];
     int cols, rows, pw = 0, ph = 0;
     int n;
 
@@ -194,22 +330,22 @@ static int run_keytest(oq_present_config *cfg, const oq_mouse_config *mc)
     oq_term_size(&cols, &rows);
 
     if (mc) {
-        oq_mouse_init(mc);
-        mouse_calibrate(cfg, cols, rows);
-        oq_term_mouse_enable();
+        if (pointer_start(mc, cfg, cols, rows, edge_given, turn_given))
+            return 1;           /* main prints pointer_note after restoring */
         pw = cols * cell_px_w;
         ph = rows * cell_px_h;
     }
 
     n = snprintf(hdr, sizeof(hdr),
                  "key-release: %s\r\n"
-                 "pointer:     %s (text area %dx%d px, %dx%d per cell)\r\n"
+                 "pointer:     %s\r\n"
+                 "text area:   %dx%d px, %dx%d per cell\r\n"
                  "press keys (arrows, Enter, W, Ctrl) or move the pointer;"
                  " Ctrl-Q, Ctrl-\\ or F10 quits\r\n\r\n",
                  oq_term_has_key_release()
                      ? "YES - kitty keyboard protocol active"
                      : "NO - press-only fallback, holds are synthesised",
-                 mc ? "on" : "off (--no-mouse)", pw, ph,
+                 mc ? pointer_note : "off (--mouse=none)", pw, ph,
                  cell_px_w, cell_px_h);
     fwrite(hdr, 1, (size_t)n, stdout);
     fflush(stdout);
@@ -217,7 +353,8 @@ static int run_keytest(oq_present_config *cfg, const oq_mouse_config *mc)
     while (!oq_term_quit_requested && !oq_input_quit()) {
         struct timespec ts = { 0, 20 * 1000 * 1000 };
 
-        oq_input_poll(keytest_sink, mc ? mouse_sink : NULL, NULL);
+        oq_input_poll(keytest_sink,
+                      pointer_src == PSRC_TERM ? mouse_sink : NULL, NULL);
         oq_input_expire(keytest_sink, NULL);
         if (mc) {
             int dx, dy, mx, my;
@@ -331,7 +468,7 @@ static int64_t now_ns(void)
 static int run_game(const oq_present_backend *be, oq_present_config *cfg,
                     const char *pak, const char *res, const char *logpath,
                     int nframes, int sound, int fps, int cap_cols, int cap_rows,
-                    const oq_mouse_config *mc)
+                    const oq_mouse_config *mc, int edge_given, int turn_given)
 {
     struct sink_ctx ctx;
     oq_retro_config rc;
@@ -356,7 +493,6 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     }
     ctx.cap_cols = cap_cols;
     ctx.cap_rows = cap_rows;
-    ctx.mouse = mc != NULL;
 
     {
         int tc, tr;
@@ -365,14 +501,16 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
         fit_canvas(&ctx, tc, tr);
         oq_term_clear();
         be->resize(cfg);
-        /* Both of these write to the terminal, so they have to happen
-         * before the render thread starts and take stdout over. */
-        if (mc) {
-            oq_mouse_init(mc);
-            mouse_calibrate(cfg, tc, tr);
-            oq_term_mouse_enable();
-        }
+        /* This writes to the terminal, so it has to happen before the
+         * render thread starts and takes stdout over. */
+        if (mc && pointer_start(mc, cfg, tc, tr, edge_given, turn_given))
+            return 1;           /* main prints pointer_note after restoring */
     }
+    /* After pointer_start, which is where a failed grab downgrades evdev to
+     * the terminal.  Only the terminal source cares about the text area:
+     * it is the space its reports and steering bands live in, whereas
+     * evdev counts are not in any window's coordinates at all. */
+    ctx.mouse = mc != NULL && pointer_src == PSRC_TERM;
 
     if (oq_render_start(be, cfg)) {
         oq_term_shutdown();
@@ -399,13 +537,19 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     }
 
     oq_input_init(oq_term_has_key_release());
+    /* The log is the only place this can go now: stdout is the picture and
+     * stderr shares the terminal with it.  It opens with the core, which is
+     * why the choice is reported here rather than where it was made. */
+    if (mc)
+        oq_retro_log("mouse: %s\n", pointer_note);
     period = (int64_t)(1000000000.0 / oq_retro_fps());
     next = now_ns() + period;
 
     while (!oq_term_quit_requested && !oq_input_quit()) {
         int64_t remain;
 
-        oq_input_poll(key_sink, mc ? mouse_sink : NULL, NULL);
+        oq_input_poll(key_sink,
+                      pointer_src == PSRC_TERM ? mouse_sink : NULL, NULL);
         oq_input_expire(key_sink, NULL);
         if (mc) {
             int dx, dy;
@@ -431,6 +575,10 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     }
 
     oq_render_stop();
+    /* Give the pointer back before the slow parts of shutdown: the grab is
+     * the user's whole desktop mouse, and unloading the core is no reason
+     * to keep holding it. */
+    oq_evdev_close();
     oq_term_mouse_disable();
     oq_retro_shutdown();
     return 0;
@@ -445,8 +593,10 @@ int main(int argc, char **argv)
     const oq_present_backend *be;
     oq_present_config cfg;
     oq_mouse_config mc;
+    const char *mouse_dev = NULL;
     int demo = 0, keytest = 0, nframes = 0, sound = 1, i, rc;
-    int fps = 30, cap_cols = -1, cap_rows = -1, mouse = 1;
+    int fps = 30, cap_cols = -1, cap_rows = -1;
+    int mouse_mode = MOUSE_AUTO, edge_given = 0, turn_given = 0;
 
     /* 2.0 counts per pixel is 0.13 degrees per pixel with the engine's stock
      * cvars: about a quarter turn across the middle of a 1000px window,
@@ -455,6 +605,7 @@ int main(int argc, char **argv)
     mc.edge = 0.15;
     mc.turn = 220.0;
     mc.invert = 0;
+    mc.relative = 0;
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
@@ -499,12 +650,27 @@ int main(int argc, char **argv)
             mc.sens = atof(a + 13);
         } else if (!strncmp(a, "--mouse-edge=", 13)) {
             mc.edge = atof(a + 13);
+            edge_given = 1;
         } else if (!strncmp(a, "--mouse-turn=", 13)) {
             mc.turn = atof(a + 13);
+            turn_given = 1;
         } else if (!strcmp(a, "--mouse-invert")) {
             mc.invert = 1;
+        } else if (!strncmp(a, "--mouse-dev=", 12)) {
+            mouse_dev = a + 12;
+        } else if (!strcmp(a, "--mouse-list")) {
+            /* Before any terminal setup, so this is a plain program writing
+             * to a plain stdout -- the "stdout is the picture" rule binds
+             * only once the alternate screen is up. */
+            oq_evdev_list(stdout);
+            return 0;
+        } else if (!strncmp(a, "--mouse=", 8)) {
+            if (parse_mouse(a + 8, &mouse_mode)) {
+                usage(argv[0]);
+                return 2;
+            }
         } else if (!strcmp(a, "--no-mouse")) {
-            mouse = 0;
+            mouse_mode = MOUSE_NONE;    /* the older spelling of --mouse=none */
         } else if (!strcmp(a, "--no-sound")) {
             sound = 0;
         } else if (!strcmp(a, "--keytest")) {
@@ -533,12 +699,26 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    /* A device named by hand, or evdev asked for by name, must not silently
+     * fall back to the terminal: the whole class of bug this project keeps
+     * hitting is an option that looks accepted and is quietly dropped. */
+    pointer_required = (mouse_mode == MOUSE_EVDEV) ||
+                       (mouse_dev != NULL && mouse_mode != MOUSE_NONE &&
+                        mouse_mode != MOUSE_TERM);
+    if (demo)
+        mouse_mode = MOUSE_NONE;        /* a test pattern has no view to aim */
+    if (pointer_select(mouse_mode, mouse_dev))
+        return 2;
+
     if (oq_term_init())
         return 1;
 
     if (keytest) {
-        rc = run_keytest(&cfg, mouse ? &mc : NULL);
+        rc = run_keytest(&cfg, pointer_src != PSRC_NONE ? &mc : NULL,
+                         edge_given, turn_given);
         oq_term_shutdown();
+        if (pointer_note[0])
+            fprintf(stderr, "omaquake: mouse: %s\n", pointer_note);
         return rc;
     }
 
@@ -554,7 +734,9 @@ int main(int argc, char **argv)
         rc = run_demo(be, &cfg, nframes ? nframes : 600);
     } else {
         rc = run_game(be, &cfg, game, res, logpath, nframes, sound,
-                      fps, cap_cols, cap_rows, mouse ? &mc : NULL);
+                      fps, cap_cols, cap_rows,
+                      pointer_src != PSRC_NONE ? &mc : NULL,
+                      edge_given, turn_given);
     }
 
     be->shutdown();
@@ -562,5 +744,10 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "omaquake: backend=%s key-release=%s\n",
             video, oq_term_has_key_release() ? "yes (kitty kbd)" : "no");
+    /* Repeated on stderr because the log file is optional, and "which
+     * pointer source did I actually get" is the first question when aiming
+     * misbehaves. */
+    if (pointer_note[0])
+        fprintf(stderr, "omaquake: mouse: %s\n", pointer_note);
     return rc;
 }

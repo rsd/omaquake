@@ -9,6 +9,8 @@
  */
 #include "oq_term.h"
 
+#include "oq_evdev.h"
+
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -28,6 +30,7 @@ static int alt_screen;
 static int kbd_pushed;
 static int has_key_release;
 static int mouse_on;
+static int focus_on;
 static int text_px_w, text_px_h;
 static int last_cols, last_rows;
 
@@ -216,27 +219,45 @@ int oq_term_text_pixels(int *w, int *h)
     return 0;
 }
 
+void oq_term_focus_enable(void)
+{
+    if (focus_on)
+        return;
+    write_all("\033[?1004h");       /* tell us when we lose focus */
+    focus_on = 1;
+}
+
 void oq_term_mouse_enable(void)
 {
-    if (mouse_on)
-        return;
     /* 1003 reports every pointer motion, not just drags, so looking around
      * needs no button held.  1016 is not a nicety: motion reports are
      * coalesced to one per cell crossing in every other encoding, which is
      * an aiming resolution of one character -- and it is only in SGR-pixel
-     * mode that the terminal skips that coalescing and reports pixels. */
-    write_all("\033[?1003h"        /* report every motion, not just drags */
-              "\033[?1016h"        /* ...in pixels, uncoalesced           */
-              "\033[?1004h");      /* tell us when we lose focus          */
-    mouse_on = 1;
+     * mode that the terminal skips that coalescing and reports pixels.
+     *
+     * Only the terminal pointer source wants these.  With evdev the kernel
+     * is already handing us the motion, and asking the terminal to track
+     * and encode the same pointer as well would be pure overhead on both
+     * ends -- hence the split from focus reporting, which both sources
+     * want. */
+    if (!mouse_on) {
+        write_all("\033[?1003h"    /* report every motion, not just drags */
+                  "\033[?1016h");  /* ...in pixels, uncoalesced           */
+        mouse_on = 1;
+    }
+    oq_term_focus_enable();
 }
 
 void oq_term_mouse_disable(void)
 {
-    if (!mouse_on)
-        return;
-    write_all("\033[?1004l\033[?1016l\033[?1003l");
-    mouse_on = 0;
+    if (focus_on) {
+        write_all("\033[?1004l");
+        focus_on = 0;
+    }
+    if (mouse_on) {
+        write_all("\033[?1016l\033[?1003l");
+        mouse_on = 0;
+    }
 }
 
 int oq_term_init(void)
@@ -305,6 +326,14 @@ int oq_term_init(void)
 
 void oq_term_shutdown(void)
 {
+    /* The evdev grab rides on this function precisely because it is the
+     * one restore path everything already goes through: the normal exit,
+     * atexit(), and the SIGINT/SIGTERM handlers by way of the loop's quit
+     * flag.  A grab left on is worse than a terminal left in raw mode --
+     * it is the user's whole desktop pointer, frozen.  (The kernel drops
+     * it when the descriptor closes, so a SIGKILL or a crash still gives
+     * the mouse back; only a live process can hold it.) */
+    oq_evdev_close();
     oq_term_mouse_disable();
     if (kbd_pushed) {
         write_all("\033[<u");   /* pop keyboard flags */

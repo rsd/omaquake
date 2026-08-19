@@ -23,6 +23,12 @@ typedef struct {
 } oq_retro_config;
 
 int    oq_retro_init(const oq_retro_config *cfg, const char *pak_path);
+
+/* Write a host-side line to the same --log file the core logs to.  The
+ * only diagnostic channel that exists once the game is up: stdout is the
+ * picture and stderr shares the terminal with it.  A no-op before
+ * oq_retro_init() has opened the log, and when no --log was given. */
+void   oq_retro_log(const char *fmt, ...);
 void   oq_retro_run(void);              /* advance exactly one frame */
 double oq_retro_fps(void);              /* from retro_get_system_av_info */
 void   oq_retro_key(unsigned keycode, int down, uint16_t mods);

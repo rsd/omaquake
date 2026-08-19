@@ -91,6 +91,12 @@ void oq_mouse_track(int x, int y)
     last_track_ms = t;
 }
 
+void oq_mouse_move(int dx, int dy)
+{
+    accum_x += dx * conf.sens;
+    accum_y += dy * conf.sens * (conf.invert ? -1.0 : 1.0);
+}
+
 /* How hard this axis steers, -1..1.  Zero through the central region, then
  * a squared ramp across the band so entering it is a nudge rather than a
  * step change and full rate is only reached at the very edge. */
@@ -140,7 +146,12 @@ void oq_mouse_step(int *dx, int *dy)
     if (dt < 0.0)   dt = 0.0;
     if (dt > 0.1)   dt = 0.1;
 
-    if (have_pos) {
+    /* A relative source never walls out at the window edge, which is the
+     * only thing the steering band exists to work around -- adding a rate
+     * term on top of unbounded deltas would just be a second, unasked-for
+     * turn.  have_pos is never set there either, but the test is explicit
+     * so this does not silently depend on that. */
+    if (!conf.relative && have_pos) {
         double rate = conf.turn / DEG_PER_COUNT * dt;
 
         accum_x += band(pos_x, extent_w) * rate;
@@ -156,6 +167,6 @@ void oq_mouse_debug(int *x, int *y, double *ex, double *ey)
 {
     *x = pos_x;
     *y = pos_y;
-    *ex = have_pos ? band(pos_x, extent_w) : 0.0;
-    *ey = have_pos ? band(pos_y, extent_h) : 0.0;
+    *ex = (!conf.relative && have_pos) ? band(pos_x, extent_w) : 0.0;
+    *ey = (!conf.relative && have_pos) ? band(pos_y, extent_h) : 0.0;
 }

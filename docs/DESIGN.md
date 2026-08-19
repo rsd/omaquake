@@ -213,6 +213,35 @@ Design points:
 - See "The per-screen keyboard-flag stack pitfall" above for the alt-screen
   ordering requirement — it belongs with terminal setup as much as input.
 
+## Pointer input
+
+Two sources, because they have genuinely different properties.
+
+The terminal source is portable and works over SSH, but a terminal reports
+only ABSOLUTE positions and offers no pointer-lock or warp equivalent. The
+pointer therefore reaches the window edge and cannot be re-centred, which
+makes naive delta-from-position aiming unplayable -- you cannot "lift the
+mouse". The edge-band steering blend exists purely to work around that.
+
+The evdev source sidesteps the problem entirely: `/dev/input/event*` yields
+unbounded relative motion, so aiming is 1:1 and the band is disabled. It also
+answers "hide the cursor" and "confine the cursor" for free -- `EVIOCGRAB`
+takes the device exclusively, so the compositor never sees the events, the
+pointer stops moving at all, and a compositor that hides an idle pointer keeps
+it hidden.
+
+The cost is a system-wide exclusive grab and a permission requirement
+(`input` group). Device selection is deliberately conservative: the keyboard
+test runs first and rejects outright, so a composite device that is also a
+valid pointer is refused rather than guessed at. Many gaming mice expose a
+second keyboard node -- on this machine the same mouse presents both event10
+(pointer) and event11 (keyboard) -- and opening the wrong one would be
+keylogging.
+
+Grab lifecycle is the part to be careful with: it is released on normal exit,
+via the SIGINT/SIGTERM path, and by the kernel on fd close, so no exit route
+leaves the pointer captured.
+
 ## Still to do
 
 1. **Mouse look** — in progress by another workstream at time of writing. A

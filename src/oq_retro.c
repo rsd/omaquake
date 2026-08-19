@@ -272,6 +272,18 @@ static int16_t RETRO_CALLCONV input_state(unsigned port, unsigned device,
     return 0;
 }
 
+void oq_retro_log(const char *fmt, ...)
+{
+    va_list ap;
+
+    if (!logfp)
+        return;
+    va_start(ap, fmt);
+    vfprintf(logfp, fmt, ap);
+    va_end(ap);
+    fflush(logfp);
+}
+
 void oq_retro_mouse_move(int dx, int dy)
 {
     mouse_dx += dx;

@@ -102,29 +102,52 @@ fire, run and strafe simply do nothing until you load `autoexec.cfg`.
 
 ### Mouse look
 
-Mouse look works, with one caveat inherent to terminals: they report
-**absolute** pointer positions and offer no pointer lock or warp, so the
-pointer eventually reaches the window edge and cannot be re-centred. Pure
-delta-based aiming would therefore wall out and be unplayable.
+There are two pointer sources. `--mouse=auto` (the default) prefers evdev and
+falls back to the terminal.
 
-OmaQuake uses a hybrid. In the central region the motion is 1:1, so aiming
-and flicks feel mouse-like. In a band along each edge (15% by default) a
-steering term is *added*, ramped quadratically so crossing into it is a nudge
-rather than a step — push the pointer to the edge and hold to keep turning.
-Expect real mouse feel for aiming and something closer to a good analog stick
-for sustained 180s.
+**evdev (`--mouse=evdev`)** reads the mouse directly from `/dev/input` and
+takes it with `EVIOCGRAB`. This is the good one: the deltas are true unbounded
+relative motion, so aiming is plain 1:1 like a native game, with no edge band
+and no window boundary. The grab is exclusive, so while OmaQuake runs the
+pointer freezes in place and cannot leave the terminal or stray onto another
+monitor. Under Hyprland with `cursor:hide_on_key_press` (the default) the
+pointer also disappears on your first keystroke and stays hidden, since no
+motion ever reaches the compositor.
+
+Requires read access to `/dev/input/event*` — on most distributions that means
+membership of the `input` group. `--mouse-list` shows which devices are seen
+and how each was classified. Only a device with `REL_X`, `REL_Y` and
+`BTN_LEFT` is accepted, and anything advertising keyboard keys is refused
+outright even if it also looks like a pointer — many gaming mice expose a
+second keyboard node, and reading that would be keylogging.
+
+The grab is released on exit, on Ctrl-C, and by the kernel when the process
+dies, so a `kill -9` always recovers your pointer. Quitting is on the keyboard
+(Ctrl-Q / Ctrl-\ / F10), never the mouse.
+
+**terminal (`--mouse=term`)** parses SGR-Pixels reports (mode 1016) from the
+terminal itself. Portable — no special permissions, works over SSH — but it
+only yields *absolute* positions, and terminals offer no pointer lock or warp,
+so the pointer eventually reaches the window edge and cannot be re-centred.
+To stay usable it blends 1:1 motion in the centre with a steering term in a
+band along each edge (ramped quadratically, so entering the band is a nudge
+rather than a step): push to the edge and hold to keep turning. Aiming feels
+mouse-like; sustained 180s feel more like a good analog stick. Needs a
+terminal that supports mode 1016 — Ghostty, kitty, foot and WezTerm do.
 
 | option | default | |
 |---|---|---|
-| `--no-mouse` | | leave the pointer alone entirely |
-| `--mouse-sens=F` | 2.0 | counts per pixel (~0.13°/px) |
-| `--mouse-edge=F` | 0.15 | steering band as a fraction of each side; `0` gives plain 1:1 |
-| `--mouse-turn=F` | 220 | steering rate at the very edge, deg/sec |
+| `--mouse=` | `auto` | `auto`, `evdev`, `term` or `none` |
+| `--mouse-dev=PATH` | | force a specific evdev node |
+| `--mouse-list` | | list input devices and their classification, then exit |
+| `--no-mouse` | | same as `--mouse=none` |
+| `--mouse-sens=F` | 2.0 | sensitivity |
+| `--mouse-edge=F` | 0.15 | steering band, fraction of each side; terminal source only |
+| `--mouse-turn=F` | 220 | steering rate at the edge, deg/sec; terminal source only |
 | `--mouse-invert` | | invert pitch |
 
-Requires a terminal supporting SGR-Pixels mouse reporting (mode 1016) —
-Ghostty, kitty, foot and WezTerm do. Cell-granularity reporting is too coarse
-for aiming and is not used.
+`--mouse-sens` is likely to want different values between the two sources:
+terminal deltas are screen pixels, evdev deltas are raw mouse counts.
 
 ## Audio
 
@@ -167,10 +190,12 @@ Known gaps:
 - **Held keyboard keys are not released when the terminal loses focus.**
   Mouse buttons are; keys are not, so alt-tabbing mid-strafe can leave a key
   stuck down. Needs held-key tracking in `oq_input`.
-- **The `CSI 14 t` text-area probe is untested against a live terminal.** It
-  runs once at startup; if a terminal does not answer, the `--cell` geometry
-  is used instead, which is exact only when the text area is a whole number
-  of cells.
+- **The `CSI 14 t` text-area probe is untested against a live terminal.**
+  Terminal mouse source only; evdev does not use it.
+- **If the evdev device disappears** (unplug), aiming goes dead rather than
+  falling back to the terminal source.
+- The evdev grab is taken before the level loads, so the desktop pointer
+  freezes for a second or two before the game is interactive.
 - See `docs/DESIGN.md` for the remaining to-do list and the reasoning behind
   design choices made along the way.
 
