@@ -197,7 +197,7 @@ int main(int argc, char **argv)
     const char *logpath = NULL;
     const oq_present_backend *be;
     oq_present_config cfg;
-    int demo = 0, nframes = 600, i, rc;
+    int demo = 0, nframes = 0, i, rc;
 
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
@@ -266,10 +266,9 @@ int main(int argc, char **argv)
     }
 
     if (demo) {
-        rc = run_demo(be, &cfg, nframes);
+        rc = run_demo(be, &cfg, nframes ? nframes : 600);
     } else {
-        rc = run_game(be, &cfg, game, res, logpath,
-                      nframes == 600 ? 0 : nframes);
+        rc = run_game(be, &cfg, game, res, logpath, nframes);
     }
 
     be->shutdown();
