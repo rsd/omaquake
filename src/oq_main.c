@@ -644,6 +644,17 @@ int main(int argc, char **argv)
     mc.invert = 0;
     mc.relative = 0;
 
+    /* Zero first: origin_col/origin_row are only ever assigned by
+     * fit_canvas(), which sits on the game's video-sink path. --demo and
+     * --keytest never reach it, so without this the backends hand
+     * oq_term_present_at() uninitialized stack and we emit a cursor address
+     * like ESC[1600019804;1532647768H -- the frame lands off-screen and the
+     * terminal shows nothing at all. 1;1 is the "top-left, no centering"
+     * case that oq_term_present_at() already short-circuits. */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.origin_col = 1;
+    cfg.origin_row = 1;
+
     cfg.symbols = OQ_SYMBOLS_FINE;
     cfg.color = OQ_COLOR_TRUE;
     /* Typical terminal cell proportions; --cell= overrides. */
