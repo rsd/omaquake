@@ -171,10 +171,21 @@ Panel {
 
     Process {
         id: binaryProbe
-        // `command -v` resolves a bare name on PATH and also accepts an
-        // absolute path, so one probe covers both forms the setting can take.
-        command: ["sh", "-c", "command -v -- \"$1\" >/dev/null 2>&1", "sh", root.binary]
         onExited: function (code) { root.binaryMissing = code !== 0 }
+    }
+
+    // The command is assigned here rather than bound to root.binary: a binding
+    // and the onBinaryChanged below both react to the same change, in an order
+    // QML does not promise, so the probe could start against the PREVIOUS
+    // binary and write a verdict about the wrong path. Setting both in one
+    // place makes the order explicit.
+    //
+    // `command -v` resolves a bare name on PATH and also accepts an absolute
+    // path, so one probe covers both forms the setting can take.
+    function probeBinary() {
+        binaryProbe.command = ["sh", "-c", "command -v -- \"$1\" >/dev/null 2>&1",
+                               "sh", root.binary]
+        binaryProbe.running = true
     }
 
     Process {
@@ -189,7 +200,7 @@ Panel {
 
     // The setting is user-editable at runtime, and a binary that was missing
     // under the old value tells you nothing about the new one.
-    onBinaryChanged: binaryProbe.running = true
+    onBinaryChanged: probeBinary()
 
     // Re-probe on every rejected click: the engine may have been installed
     // since the last one, and the alternative is telling someone to install
@@ -197,7 +208,7 @@ Panel {
     function activate() {
         if (root.binaryMissing) {
             installHint.running = true
-            binaryProbe.running = true
+            probeBinary()
             return
         }
         root.toggle()
@@ -243,7 +254,7 @@ Panel {
         // the watchdog killed it without saying why.
         if (root.binaryMissing) {
             installHint.running = true
-            binaryProbe.running = true
+            probeBinary()
             root.close()
             return
         }
@@ -317,7 +328,7 @@ Panel {
     // has no chrome of its own, so it would sit on top of everything forever.
     Component.onCompleted: {
         killTerminal()
-        binaryProbe.running = true
+        probeBinary()
     }
     Component.onDestruction: killTerminal()
 }
