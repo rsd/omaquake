@@ -3,47 +3,87 @@
 # WIP -- this recipe is a skeleton pending the host loop landing.  Open
 # questions are marked TODO; do not expect a clean `makepkg` yet.
 
-pkgname=omaquake
+pkgbase=omaquake
+pkgname=('omaquake' 'omaquake-shareware-data')
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Quake 1 rendered as characters in a terminal"
 arch=('x86_64')
 url="https://github.com/raul/omaquake"   # TODO: real URL once pushed
 license=('GPL-2.0-only')                  # matches the Quake engine source
-depends=('chafa' 'libcaca')
-makedepends=('git' 'make' 'gcc' 'pkgconf')
-optdepends=('quake-shareware-data: freely redistributable pak0.pak')
+makedepends=('git' 'make' 'gcc' 'pkgconf' 'libarchive')
 
 # The engine is a submodule, so the source tarball alone is not enough.
 # TODO: decide between (a) git source with submodule, or (b) vendoring
 # tyrquake at a pinned commit and adding it as a second source entry.
+#
+# quake106.zip is the 1996 shareware release: freely redistributable, and the
+# only pak0.pak that may be handed out.  It is fetched, never shipped in this
+# repo.  Mirror: https://www.gamers.org/pub/idgames/idstuff/quake/quake106.zip
 source=("git+file://$(dirname "$(realpath "$startdir")")"
-        "tyrquake::git+https://github.com/libretro/tyrquake.git")
-sha256sums=('SKIP' 'SKIP')
+        "tyrquake::git+https://github.com/libretro/tyrquake.git"
+        "https://ftp.gwdg.de/pub/misc/ftp.idsoftware.com/idstuff/quake/quake106.zip")
+sha256sums=('SKIP'
+            'SKIP'
+            'ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239')
 
 prepare() {
-  cd "$srcdir/$pkgname"
+  # NB: the git source clones into a directory named after the checkout, so
+  # this only lands if the repo directory is itself called `omaquake`.
+  # TODO: goes away with the real upstream URL.
+  cd "$srcdir/$pkgbase"
   git submodule init
   git config submodule.third_party/tyrquake.url "$srcdir/tyrquake"
   git submodule update
+
+  # makepkg unpacks quake106.zip for us, but the payload inside it is
+  # resource.1: a DOS self-extracting LHA archive.  libarchive reads LHA, so
+  # bsdtar opens it directly -- no lhasa/dosbox needed.  Member names are
+  # uppercase in the archive; everything downstream (oq_find_pak's dir/id1
+  # probe, tyrquake's walk up from the pak to its base directory) expects
+  # lowercase id1/pak0.pak, so rename on the way out.
+  cd "$srcdir"
+  bsdtar -xf resource.1 ID1/PAK0.PAK LICINFO.TXT SLICNSE.TXT README.TXT
+  install -Dm644 ID1/PAK0.PAK "$srcdir/id1/pak0.pak"
 }
 
 build() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgbase"
   make engine
   make
 }
 
 check() {
-  cd "$srcdir/$pkgname"
+  cd "$srcdir/$pkgbase"
   # Renders one frame of the test pattern; needs no game data.
   # TODO: needs a pty, so this must run under `script` or be dropped.
   ./build/omaquake --help >/dev/null
 }
 
-package() {
-  cd "$srcdir/$pkgname"
+package_omaquake() {
+  depends=('chafa' 'libcaca')
+  optdepends=('omaquake-shareware-data: freely redistributable pak0.pak')
+
+  cd "$srcdir/$pkgbase"
   make DESTDIR="$pkgdir" PREFIX=/usr install
-  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-  install -Dm644 docs/DESIGN.md "$pkgdir/usr/share/doc/$pkgname/DESIGN.md"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgbase/README.md"
+  install -Dm644 docs/DESIGN.md "$pkgdir/usr/share/doc/$pkgbase/DESIGN.md"
+}
+
+package_omaquake-shareware-data() {
+  pkgdesc="Quake 1 shareware game data (episode 1) for omaquake"
+  arch=('any')
+  license=('LicenseRef-Quake-Shareware')
+  depends=()
+
+  # /usr/share/omaquake is already on oq_find_pak's system search list, so an
+  # id1/ under it is found with no arguments and no config.
+  install -Dm644 "$srcdir/id1/pak0.pak" \
+    "$pkgdir/usr/share/omaquake/id1/pak0.pak"
+  install -Dm644 "$srcdir/LICINFO.TXT" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICINFO.TXT"
+  install -Dm644 "$srcdir/SLICNSE.TXT" \
+    "$pkgdir/usr/share/licenses/$pkgname/SLICNSE.TXT"
+  install -Dm644 "$srcdir/README.TXT" \
+    "$pkgdir/usr/share/doc/$pkgname/README.TXT"
 }

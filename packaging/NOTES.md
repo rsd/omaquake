@@ -10,10 +10,20 @@ Decisions still open for the Arch recipe:
 - **Licence.** tyrquake is GPL-2.0 (id's Quake source release). OmaQuake's
   own code must therefore be GPL-2.0-compatible; the skeleton declares
   `GPL-2.0-only`.
-- **Game data.** `pak0.pak` cannot be shipped. Shareware data could be a
-  separate `omaquake-shareware-data` package; retail data stays the user's
-  problem. Decide on a default search path (`/usr/share/omaquake/id1`,
-  `~/.local/share/omaquake/id1`).
+- **Game data.** *(settled)* `pak0.pak` cannot be shipped in this repo, but
+  the 1996 shareware release is freely redistributable, so the recipe fetches
+  `quake106.zip` at build time and splits the result into a second package,
+  `omaquake-shareware-data`, installing `/usr/share/omaquake/id1/pak0.pak`
+  (already on `oq_find_pak`'s system search list). Retail `pak1.pak` stays the
+  user's problem. Two things to know about the archive: the payload inside the
+  zip is `resource.1`, a DOS self-extracting LHA blob that `bsdtar` reads
+  directly (libarchive speaks LHA -- no `lhasa` or DOS emulator needed), and
+  its members are uppercase `ID1/PAK0.PAK`, so `prepare()` renames to the
+  lowercase layout the engine expects. Verified: the extracted pak is
+  byte-identical (sha256 `35a9c55e...`) to the `id1/pak0.pak` used in
+  development, and the binary renders from the packaged path.
+  Cost of the split: every `makepkg` run downloads the 9 MB zip even when only
+  the binary package is wanted -- `source=()` is per-pkgbase, not per-package.
 - **`check()`.** The binary requires a tty, so any smoke test has to run
   under `script -qec`. Simplest is to keep `check()` to `--help`.
 - **Optional deps.** chafa and libcaca are both optional at build time; the

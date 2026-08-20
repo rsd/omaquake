@@ -2,6 +2,7 @@
 #include "oq_evdev.h"
 #include "oq_input.h"
 #include "oq_mouse.h"
+#include "oq_paths.h"
 #include "oq_present.h"
 #include "oq_render.h"
 #include "oq_retro.h"
@@ -20,7 +21,7 @@
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "usage: %s [options] [id1/pak0.pak]\n"
+        "usage: %s [options] [path to pak0.pak, or a directory holding id1/]\n"
         "\n"
         "  --video=NAME     presentation backend: %s (default: chafa)\n"
         "  --symbols=SET    ascii | block | fine        (default: fine)\n"
@@ -742,9 +743,27 @@ int main(int argc, char **argv)
                 video, oq_present_available());
         return 2;
     }
-    if (!demo && !keytest && !game) {
-        usage(argv[0]);
-        return 2;
+    if (!demo && !keytest) {
+        /* Finding the data is not the player's job. Search the usual places
+         * and only complain, with the list, when there is nothing to find. */
+        static char pak[1024], tried[2048];
+
+        if (oq_find_pak(game, pak, sizeof(pak), tried, sizeof(tried))) {
+            if (game)
+                fprintf(stderr, "omaquake: no pak0.pak at '%s'\n", game);
+            else
+                fprintf(stderr, "omaquake: could not find pak0.pak\n");
+            if (tried[0])
+                fprintf(stderr, "looked in:\n%s", tried);
+            fprintf(stderr,
+                "\nThe pak must sit in a directory named id1 -- the engine\n"
+                "locates the rest of the game relative to it.\n"
+                "Put it at ./id1/pak0.pak, or ~/.local/share/omaquake/id1/,\n"
+                "or pass a path, or set OMAQUAKE_PAK.\n"
+                "The shareware data is freely redistributable: see README.md\n");
+            return 2;
+        }
+        game = pak;
     }
 
     /* A device named by hand, or evdev asked for by name, must not silently

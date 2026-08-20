@@ -44,8 +44,29 @@ Not included. The freely redistributable shareware release ships
 <https://ftp.gwdg.de/pub/misc/ftp.idsoftware.com/idstuff/quake/quake106.zip>
 (also mirrored at gamers.org/pub/idgames/idstuff/quake/). Inside that
 archive, `resource.1` is an LHA self-extracting executable; `bsdtar` can
-open it directly. Extract it and place `ID1/PAK0.PAK` at `id1/pak0.pak`
-relative to wherever you run `omaquake` from.
+open it directly.
+
+You do not normally need to tell OmaQuake where the data is — run it with no
+argument and it searches, in order:
+
+| |
+|---|
+| the path you gave, or `$OMAQUAKE_PAK` |
+| `./id1/` |
+| next to the binary, and the directory above it (so `build/omaquake` finds a checkout's `id1/`) |
+| `$XDG_DATA_HOME/omaquake/`, `~/.local/share/omaquake/`, `~/.omaquake/` |
+| `~/.quakespasm/`, `~/.quake/`, and the usual Steam Quake directories |
+| `/usr/local/share/omaquake/`, `/usr/share/omaquake/`, `/usr/share/quake/`, `/usr/share/games/quake/`, `/opt/quake/` |
+
+Each is tried both as the `id1` directory itself and as a directory
+*containing* `id1`, and both `pak0.pak` and `PAK0.PAK` are accepted — the
+shareware archive uses uppercase. If nothing is found, the error lists every
+place it looked.
+
+The pak has to live in a directory named `id1`: the engine locates the rest
+of the game relative to it, so a pak elsewhere would load and then fail to
+find `progs.dat`. An explicit path is honoured or refused, never quietly
+replaced by a search result.
 
 The full game's `pak1.pak` requires owning Quake and is not distributed
 here.
