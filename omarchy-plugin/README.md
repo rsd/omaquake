@@ -97,9 +97,10 @@ Known gaps:
 
 - Input pass-through through the `mask` is designed but **not yet verified**
   end to end; the compositing half is confirmed by screenshot.
-- The popout does not take focus when opened over IPC onto a monitor that is
-  not the focused one, so it stays open until something else is focused. Opening
-  by clicking the bar icon does not have this problem.
+- A popout opened over IPC onto a monitor that is not the focused one never
+  takes focus, so it never arms, and the watchdog closes it after 5s. Opening by
+  clicking the bar icon does not have this problem — the click focuses that
+  monitor, the terminal takes focus, and the popout stays up until focus leaves.
 - Does not draw its own `PopupCard`, because `PopupCard` paints a background
   behind its content and would fill the hole. The chrome here is hand-rolled,
   so it tracks the theme only through `Color.popups.*`.
