@@ -1,7 +1,7 @@
 # Maintainer: Raul Dias <raul@dias.com.br>
 #
-# WIP -- this recipe is a skeleton pending the host loop landing.  Open
-# questions are marked TODO; do not expect a clean `makepkg` yet.
+# `makepkg` builds this cleanly; what is still provisional is the source URL,
+# which points at the local checkout until the repo is pushed (see TODO).
 
 pkgbase=omaquake
 pkgname=('omaquake' 'omaquake-shareware-data')
@@ -9,18 +9,21 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Quake 1 rendered as characters in a terminal"
 arch=('x86_64')
-url="https://github.com/raul/omaquake"   # TODO: real URL once pushed
+url="https://github.com/rsd/omaquake"
 license=('GPL-2.0-only')                  # matches the Quake engine source
 makedepends=('git' 'make' 'gcc' 'pkgconf' 'libarchive')
 
-# The engine is a submodule, so the source tarball alone is not enough.
-# TODO: decide between (a) git source with submodule, or (b) vendoring
-# tyrquake at a pinned commit and adding it as a second source entry.
+# The engine is a submodule and makepkg will not fetch submodules itself, so
+# tyrquake is a second source entry and prepare() rewires the submodule at it.
+#
+# The tag pin is what makes this reproducible: an unpinned branch would
+# silently build whatever master happens to be while still calling itself
+# 0.1.0.  Bumping pkgver means moving this tag too.
 #
 # quake106.zip is the 1996 shareware release: freely redistributable, and the
 # only pak0.pak that may be handed out.  It is fetched, never shipped in this
 # repo.  Mirror: https://www.gamers.org/pub/idgames/idstuff/quake/quake106.zip
-source=("git+file://$(dirname "$(realpath "$startdir")")"
+source=("$pkgbase::git+https://github.com/rsd/omaquake.git#tag=v0.1.0"
         "tyrquake::git+https://github.com/libretro/tyrquake.git"
         "https://ftp.gwdg.de/pub/misc/ftp.idsoftware.com/idstuff/quake/quake106.zip")
 sha256sums=('SKIP'
@@ -28,13 +31,13 @@ sha256sums=('SKIP'
             'ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239')
 
 prepare() {
-  # NB: the git source clones into a directory named after the checkout, so
-  # this only lands if the repo directory is itself called `omaquake`.
-  # TODO: goes away with the real upstream URL.
   cd "$srcdir/$pkgbase"
   git submodule init
   git config submodule.third_party/tyrquake.url "$srcdir/tyrquake"
-  git submodule update
+  # protocol.file.allow: git refuses file:// submodule transport by default
+  # since CVE-2022-39253.  The URL we just pointed it at is makepkg's own
+  # verified checkout, not anything the network chose, so allow it here only.
+  git -c protocol.file.allow=always submodule update
 
   # makepkg unpacks quake106.zip for us, but the payload inside it is
   # resource.1: a DOS self-extracting LHA archive.  libarchive reads LHA, so
@@ -61,7 +64,10 @@ check() {
 }
 
 package_omaquake() {
-  depends=('chafa' 'libcaca')
+  # alsa-lib is a real link-time dependency, not just an optional backend --
+  # namcap flags its absence.  chafa and libcaca are optional at build time but
+  # hard deps here so `--video=` always has both choices at runtime.
+  depends=('chafa' 'libcaca' 'alsa-lib')
   optdepends=('omaquake-shareware-data: freely redistributable pak0.pak')
 
   cd "$srcdir/$pkgbase"
@@ -74,7 +80,6 @@ package_omaquake-shareware-data() {
   pkgdesc="Quake 1 shareware game data (episode 1) for omaquake"
   arch=('any')
   license=('LicenseRef-Quake-Shareware')
-  depends=()
 
   # /usr/share/omaquake is already on oq_find_pak's system search list, so an
   # id1/ under it is found with no arguments and no config.
