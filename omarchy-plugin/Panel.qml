@@ -187,6 +187,10 @@ Panel {
                   + "https://github.com/rsd/omaquake"]
     }
 
+    // The setting is user-editable at runtime, and a binary that was missing
+    // under the old value tells you nothing about the new one.
+    onBinaryChanged: binaryProbe.running = true
+
     // Re-probe on every rejected click: the engine may have been installed
     // since the last one, and the alternative is telling someone to install
     // software they just installed.
