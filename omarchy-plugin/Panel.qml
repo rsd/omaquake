@@ -65,7 +65,7 @@ Panel {
         bar: root.bar
         iconComponent: Component {
             QuakeIcon {
-                iconSize: Style.bar.iconCanvas
+                iconSize: Style.bar.iconCanvas * 1.15
                 color: button.foreground
             }
         }
@@ -189,30 +189,23 @@ Panel {
         return a
     }
 
-    Process {
-        id: spawn
-        running: false
-    }
-
-    Process {
-        id: reap
-        // pkill never signals itself, so matching our own app-id is safe here.
-        command: ["pkill", "-f", "app-id=" + root.appId]
-        running: false
-    }
-
+    // Fire-and-forget rather than a Process with a `running` flag. Driving a
+    // reused Process by assigning running=false and then true in the same
+    // event-loop turn can coalesce into no property change at all, so the
+    // command never runs -- which silently skipped the kill and left the
+    // terminal alive on screen after the chrome had already come down.
     function launchTerminal() {
         var cmd = "foot --app-id=" + root.appId + " -o colors.alpha=1.0"
         if (root.gameDir !== "") cmd += " -D " + root.gameDir
         cmd += " -- " + root.binary + " " + root.gameArgs.join(" ")
 
-        spawn.command = ["hyprctl", "dispatch", "exec", root.spawnRule + " " + cmd]
-        spawn.running = true
+        Quickshell.execDetached(["hyprctl", "dispatch", "exec",
+                                 root.spawnRule + " " + cmd])
     }
 
+    // pkill never signals itself, so matching our own app id is safe here.
     function killTerminal() {
-        reap.running = false
-        reap.running = true
+        Quickshell.execDetached(["pkill", "-f", "app-id=" + root.appId])
     }
 
     // --- close on focus loss -------------------------------------------
@@ -238,12 +231,22 @@ Panel {
         if (root.armed) root.close()
     }
 
-    // If the terminal never appears at all -- wrong binary path, foot not
-    // installed -- do not leave a chrome ring floating over an empty hole.
+    // If the terminal never took focus -- a wrong binary path, foot missing, or
+    // an IPC-driven open onto a monitor that is not the focused one -- do not
+    // leave a chrome ring floating over an empty hole.
+    //
+    // It kills the terminal explicitly as well as closing. close() already
+    // routes through killTerminal(), but a terminal that outlives its chrome is
+    // floating, pinned and undecorated, and would sit on top of everything with
+    // nothing left to close it.
     Timer {
         id: spawnWatchdog
         interval: 5000
-        onTriggered: if (root.opened && !root.armed) root.close()
+        onTriggered: {
+            if (!root.opened || root.armed) return
+            root.close()
+            root.killTerminal()
+        }
     }
 
     onOpenedChanged: {

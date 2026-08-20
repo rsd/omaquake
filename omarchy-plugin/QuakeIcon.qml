@@ -2,28 +2,46 @@ import QtQuick
 import QtQuick.Shapes
 import qs.Commons
 
-// The Quake mark, as vector geometry rather than a glyph -- Nerd Fonts have
-// nothing resembling it, and the bar's icon font is where every other widget
-// gets its symbol from.
+// The Quake logo: an open crescent with a nail driven through it.
 //
-// Follows the DropboxIcon pattern: a plain Item exposing iconSize and color so
-// BarIconButton can hand it the theme foreground and let it scale with the bar.
+// Traced from the real mark with potrace rather than drawn by hand -- the
+// silhouette is a crescent plus a vertical nail, not a Q with a diagonal tail,
+// and eyeballing it produced something much closer to a magnifying glass.
+//
+// The source was thickened (a 40px dilate at the original 1473x1999) BEFORE
+// tracing. The real logo's arms taper to points, and at the bar's ~16px icon
+// canvas those points render as nothing -- the mark dissolves into grey mush.
+// Thickening first is what makes it survive being drawn 100x smaller than it
+// was designed for.
+//
+// One contour, so no fill rule is needed: the crescent is open at the top, so
+// the ring's interior connects to the outside rather than being an enclosed
+// hole. That gap survived the dilate, which is worth re-checking if the source
+// is ever retraced with a heavier one.
+//
+// Follows the DropboxIcon pattern -- a plain Item exposing iconSize and color,
+// so BarIconButton can hand it the theme foreground.
 Item {
     id: root
 
-    property real iconSize: Style.font.icon
+    // iconSize is the HEIGHT. The mark is markedly taller than it is wide, so
+    // matching its height to a square icon canvas leaves it looking small next
+    // to the glyph icons; the widget compensates by asking for a bit more.
+    property real iconSize: Style.bar.iconCanvas
     property color color: Color.foreground
 
-    width: iconSize
-    height: iconSize
-    implicitWidth: iconSize
-    implicitHeight: iconSize
+    readonly property real aspect: 0.7346
 
-    // Drawn in a 100x100 space and scaled down, so the path data stays legible
-    // instead of being written as fractions of the icon size.
+    width: iconSize * aspect
+    height: iconSize
+    implicitWidth: width
+    implicitHeight: height
+
+    // Drawn at the traced size and scaled down, so the path data stays exactly
+    // as potrace emitted it instead of being rewritten as fractions of iconSize.
     Item {
         anchors.centerIn: parent
-        width: 100
+        width: 100 * root.aspect
         height: 100
         scale: root.iconSize / 100
 
@@ -33,26 +51,10 @@ Item {
             layer.enabled: true
             layer.samples: 4
 
-            // The ring. OddEvenFill turns the second subpath into the counter.
-            // Faceted rather than circular: at bar size the facets vanish, but
-            // they keep it from reading as a plain circle at panel size.
             ShapePath {
                 fillColor: root.color
                 strokeWidth: 0
-                fillRule: ShapePath.OddEvenFill
-                PathSvg {
-                    path: "M 26 0 L 56 0 L 80 24 L 80 50 L 56 74 L 26 74 L 2 50 L 2 24 Z "
-                        + "M 30 22 L 52 22 L 60 30 L 60 44 L 52 52 L 30 52 L 22 44 L 22 30 Z"
-                }
-            }
-
-            // The blade. Kept as its own ShapePath so it does not take part in
-            // the ring's fill rule -- sharing one path would punch a hole
-            // wherever the two overlap instead of filling it.
-            ShapePath {
-                fillColor: root.color
-                strokeWidth: 0
-                PathSvg { path: "M 56 48 L 98 88 L 72 98 L 48 66 Z" }
+                PathSvg { path: "M 50.65 0.16 C 49.74 0.3 49.01 1.07 48.87 2.06 C 48.7 3.25 49.41 4.54 50.56 5.09 C 51.54 5.56 54.83 7.85 56.08 8.93 C 56.76 9.52 57.99 10.75 58.54 11.39 C 59.76 12.8 61.6 15.57 62.31 17.04 C 62.51 17.46 62.71 17.79 62.85 17.95 C 63.06 18.19 63.08 18.24 63.13 18.58 C 63.2 19.06 63.36 19.61 63.54 20.03 C 63.62 20.22 63.71 20.53 63.74 20.78 C 63.86 21.67 64.26 23.18 64.52 23.69 C 64.63 23.9 64.64 24.01 64.69 25.29 C 64.8 28.06 64.89 29.1 65.07 29.52 C 65.13 29.68 65.13 29.73 65.06 30.01 C 65.02 30.19 64.97 30.7 64.94 31.26 C 64.85 33.21 64.47 35.47 63.92 37.22 C 63.73 37.85 63.6 38.33 63.49 38.85 C 63.38 39.4 63.22 39.79 62.45 41.34 C 62.11 42.01 61.83 42.66 61.73 42.97 C 61.58 43.46 61.56 43.49 61.19 43.88 C 60.75 44.33 60.42 44.81 60.15 45.39 C 60.02 45.68 59.87 45.89 59.59 46.19 C 59.38 46.41 59.08 46.76 58.92 46.96 C 58.62 47.35 58.2 47.82 57.07 49.04 C 56.69 49.45 56.28 49.93 56.17 50.11 C 55.98 50.41 55.93 50.45 55.53 50.65 C 55.22 50.8 54.96 50.98 54.56 51.34 C 53.5 52.27 53.2 52.5 52.83 52.69 C 52.57 52.82 52.31 53.02 52 53.32 C 51.62 53.69 51.52 53.76 51.29 53.81 C 50.95 53.89 50.52 54.15 50.15 54.51 C 49.88 54.77 49.81 54.81 49.5 54.89 C 49.02 55.01 48.61 55.17 47.85 55.57 C 46.46 56.3 44.72 56.82 42.47 57.19 L 42.29 57.22 L 42.31 55.15 C 42.32 53.93 42.3 52.63 42.26 51.96 C 42.17 50.38 42.18 50.16 42.34 49.81 C 42.53 49.39 42.59 48.81 42.52 48.23 C 42.45 47.69 42.44 47.72 42.78 47.49 C 43.18 47.23 43.54 47.12 44.38 47.01 C 45.59 46.85 46.14 46.64 46.65 46.1 C 47.53 45.17 47.55 43.4 46.67 42.58 C 46.03 41.98 45.91 41.97 41.27 41.96 C 39.21 41.96 35.49 41.94 32.98 41.92 C 27.45 41.88 27.5 41.88 26.85 42.48 C 25.96 43.32 26 45.13 26.94 46.12 C 27.53 46.73 28.13 46.93 29.56 47 C 30.4 47.04 30.46 47.07 31.02 47.6 L 31.3 47.87 L 31.3 48.25 C 31.3 48.46 31.34 48.85 31.38 49.11 C 31.44 49.51 31.44 49.62 31.38 49.86 C 31.21 50.53 31.18 51.08 31.18 53.29 C 31.18 55.21 31.19 55.54 31.26 55.83 C 31.34 56.13 31.34 56.19 31.28 56.5 C 31.24 56.69 31.2 56.9 31.2 56.98 C 31.2 57.06 31.18 57.12 31.16 57.12 C 31.14 57.12 30.85 57.08 30.53 57.04 C 29.7 56.93 29.06 56.97 28.3 57.2 C 28.24 57.21 28.17 57.14 28.06 56.96 C 27.73 56.37 27.11 55.95 26.26 55.74 C 25.88 55.64 25.71 55.56 25.38 55.35 C 24.25 54.59 22.51 53.94 21.88 54.05 C 21.72 54.07 21.71 54.06 21.57 53.73 C 21.36 53.25 20.81 52.7 20.04 52.24 C 19.45 51.88 19.33 51.77 18.82 51.19 C 18.66 51 18.27 50.67 17.97 50.44 C 17.2 49.87 16.87 49.55 16.32 48.84 C 15.75 48.11 15.35 47.71 15 47.52 C 14.71 47.36 14.16 46.73 14.11 46.5 C 14.07 46.32 13.78 45.84 13.5 45.53 C 13.35 45.34 13.25 45.16 13.18 44.92 C 12.99 44.31 12.61 43.64 12.21 43.21 C 11.96 42.95 11.83 42.77 11.81 42.65 C 11.65 41.9 11.11 40.68 10.69 40.13 C 10.45 39.82 10.42 39.74 10.28 39.16 C 10.17 38.71 10.06 38.37 9.87 38 C 9.65 37.54 9.61 37.43 9.6 37.12 C 9.58 36.52 9.37 35.91 8.99 35.34 C 8.92 35.23 8.88 35.13 8.9 35.1 C 9.01 34.92 9.02 34.31 8.93 33.63 C 8.77 32.52 8.73 31.91 8.7 30.61 C 8.68 29.95 8.64 29.13 8.6 28.78 C 8.53 28.19 8.53 28.12 8.62 27.68 C 8.89 26.37 9.07 25.01 9.13 23.77 C 9.18 22.84 9.18 22.82 9.36 22.42 C 9.62 21.86 9.77 21.37 9.86 20.89 C 9.9 20.66 9.97 20.41 10.03 20.34 C 10.29 19.96 10.56 19.24 10.63 18.7 C 10.67 18.44 10.75 18.23 10.94 17.86 C 11.08 17.58 11.23 17.24 11.28 17.09 C 11.34 16.94 11.51 16.64 11.67 16.41 C 11.97 16 12.32 15.36 12.43 15.02 C 12.46 14.92 12.62 14.68 12.79 14.47 C 13.34 13.79 13.69 13.3 13.89 12.94 C 14.18 12.41 15.43 10.99 15.95 10.59 C 16.46 10.2 16.78 9.86 16.94 9.55 C 17.11 9.22 17.08 9.24 18.37 8.25 C 18.84 7.89 19.48 7.38 19.8 7.13 C 20.44 6.62 20.94 6.31 22.19 5.64 C 23.7 4.84 24.2 4.43 24.52 3.75 C 24.98 2.78 24.79 1.8 23.98 1.02 C 22.99 0.06 21.87 0.03 19.93 0.91 C 17.72 1.92 16.07 2.88 15.36 3.56 C 15.05 3.87 14.86 4 14.45 4.2 C 13.89 4.49 13.24 5.04 13.01 5.44 C 12.91 5.59 12.77 5.72 12.4 5.94 C 11.88 6.26 11.1 6.96 10.62 7.55 C 10.39 7.82 10.28 7.91 10.12 7.96 C 9.39 8.18 8.77 8.86 8.65 9.58 C 8.62 9.75 8.55 9.86 8.23 10.19 C 8.02 10.41 7.79 10.72 7.71 10.87 C 7.63 11.02 7.42 11.29 7.25 11.47 C 6.94 11.8 6.74 12.13 6.58 12.59 C 6.51 12.78 6.39 12.94 6.09 13.24 C 5.64 13.7 5.34 14.22 5.23 14.77 C 5.17 15.03 5.1 15.16 4.84 15.52 C 3.96 16.7 3.5 17.63 3.4 18.47 C 3.38 18.66 3.32 18.79 3.19 18.96 C 2.87 19.39 2.67 19.9 2.58 20.6 C 2.53 20.91 2.49 21.01 2.34 21.21 C 1.91 21.77 1.38 23.5 1.17 25.01 C 1.14 25.23 1.04 25.65 0.95 25.96 C 0.58 27.18 0.18 29.88 0.19 31.04 C 0.19 31.16 0.15 31.53 0.11 31.87 C 0.02 32.51 0 33.4 0.08 33.84 C 0.11 34.05 0.22 35.37 0.23 35.67 C 0.23 35.69 0.21 35.87 0.18 36.07 C 0.13 36.43 0.17 36.94 0.27 37.22 C 0.3 37.29 0.32 37.68 0.32 38.09 C 0.32 38.96 0.42 39.68 0.6 40.13 C 0.73 40.46 0.73 40.47 0.68 41.03 C 0.59 41.93 0.78 42.92 1.21 43.78 C 1.44 44.22 1.56 44.62 1.6 45.02 C 1.66 45.76 1.94 46.5 2.29 46.9 C 2.38 47 2.49 47.17 2.53 47.29 C 2.69 47.69 3.49 49.4 3.9 50.21 C 4.47 51.33 4.84 51.88 5.44 52.51 C 6.11 53.2 6.35 53.52 6.73 54.22 C 7.4 55.45 8.86 57.32 10.31 58.8 C 11.01 59.51 11.71 59.92 12.22 59.92 C 12.5 59.92 13.4 61.17 13.56 61.77 C 13.81 62.75 14.56 63.38 15.63 63.53 C 15.99 63.58 16.02 63.59 16.31 63.86 C 17.02 64.51 19.06 65.92 20 66.42 C 20.81 66.85 21.75 67.04 22.55 66.95 L 22.93 66.9 L 23.02 67.12 C 23.13 67.39 23.54 67.84 23.83 68.01 C 24.06 68.15 26.03 68.82 27.1 69.13 C 28.1 69.42 29.44 69.73 30.25 69.86 C 30.51 69.9 30.79 69.95 30.86 69.96 L 30.98 69.99 L 30.98 71.92 C 30.98 73.68 30.99 73.89 31.07 74.16 C 31.15 74.4 31.17 74.66 31.18 75.49 C 31.19 76.05 31.23 76.85 31.27 77.26 C 31.56 79.9 31.98 82.79 32.6 86.5 C 33.17 89.85 33.29 90.52 33.91 93.96 C 34.66 98.05 34.79 98.53 35.37 99.15 C 36.14 99.97 37.5 100 38.33 99.21 C 38.93 98.64 39.12 97.99 39.44 95.28 C 39.64 93.56 40.06 91 40.51 88.69 C 40.93 86.58 41.03 85.98 41.04 85.55 C 41.04 85.34 41.07 85.13 41.1 85.07 C 41.23 84.84 41.33 84.28 41.37 83.55 C 41.4 82.87 41.42 82.71 41.56 82.32 C 42.07 80.81 42.45 76.57 42.21 75.04 C 42.13 74.48 42.13 74.33 42.26 73.93 C 42.39 73.48 42.47 72.55 42.47 71.26 L 42.47 70.19 L 42.83 70.13 C 43.47 70.03 44.33 69.83 44.88 69.65 C 45.31 69.51 45.57 69.47 46.06 69.43 C 46.96 69.36 47.49 69.2 47.95 68.86 C 48.03 68.8 48.2 68.73 48.32 68.71 C 49.02 68.6 49.77 68.32 51.35 67.56 C 51.96 67.27 52.69 66.96 52.98 66.86 C 54.01 66.52 54.59 66.2 56.36 65 C 59.37 62.96 60.73 61.87 61 61.24 C 61.07 61.09 61.15 61.01 61.3 60.94 C 61.86 60.67 62.81 59.75 64.42 57.92 C 67.97 53.9 69.08 51.95 71.07 46.24 C 71.39 45.33 71.96 43.74 72.5 42.29 C 72.88 41.24 72.91 40.69 72.62 40.04 L 72.49 39.76 L 72.72 39.4 C 73.41 38.33 73.46 37.94 73.4 33.94 C 73.35 30.6 73.29 29.5 73.12 28.49 C 72.97 27.58 72.6 26.29 72.36 25.81 C 72.26 25.6 72.24 25.52 72.27 25.3 C 72.31 24.92 72.23 24.43 71.94 23.38 C 71.37 21.29 70.93 20.17 70.42 19.48 C 70.2 19.18 70.17 19.12 70.11 18.71 C 69.95 17.61 69.34 16.51 66.68 12.52 C 64.22 8.82 63.07 7.47 61.13 5.97 C 60.77 5.7 60.6 5.53 60.49 5.34 C 60.08 4.61 58.67 3.62 55.67 1.97 C 52.89 0.44 51.69 0 50.65 0.16 Z" }
             }
         }
     }
