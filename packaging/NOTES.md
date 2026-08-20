@@ -45,8 +45,8 @@ pak. Three things had to be right to get there, all easy to undo by accident:
 - `alsa-lib` is a genuine link-time dependency of the binary, not merely an
   optional backend. namcap catches it if it goes missing.
 
-The source is pinned to a commit rather than a tag, because no `v0.1.0` tag
-exists yet; tagging and switching to `#tag=` is the tidier end state.
+The source is pinned to the `v0.1.0` tag. Bumping `pkgver` means tagging
+first and moving the `#tag=` too.
 
 Two loose ends, neither a blocker:
 
@@ -55,5 +55,13 @@ Two loose ends, neither a blocker:
 - `source=()` is per-pkgbase, so the 9 MB shareware zip is fetched even by
   someone who only wants the binary package.
 
-For AUR submission the recipe additionally needs a `.SRCINFO`
-(`makepkg --printsrcinfo > .SRCINFO`) committed alongside it.
+## Published on AUR
+
+`ssh://aur@aur.archlinux.org/omaquake.git` (https://aur.archlinux.org/packages/omaquake),
+first pushed 2026-08-20 as 0.1.0-1. The AUR repo holds only `PKGBUILD`,
+`.SRCINFO` and a `.gitignore`; `packaging/PKGBUILD` here is the source of
+truth. To release: tag here, bump `pkgver`/`#tag=` (or `pkgrel`), copy the
+PKGBUILD into a clone of the AUR repo, `makepkg --printsrcinfo > .SRCINFO`,
+commit both, push to `master`. namcap's split-package check is what surfaced
+the makedepends fix: per-package `depends` are not installed before `build()`,
+and the Makefile drops a backend it cannot `pkg-config` without failing.

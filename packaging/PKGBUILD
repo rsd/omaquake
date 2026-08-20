@@ -1,7 +1,4 @@
 # Maintainer: Raul Dias <raul@dias.com.br>
-#
-# `makepkg` builds this cleanly; what is still provisional is the source URL,
-# which points at the local checkout until the repo is pushed (see TODO).
 
 pkgbase=omaquake
 pkgname=('omaquake' 'omaquake-shareware-data')
@@ -11,7 +8,12 @@ pkgdesc="Quake 1 rendered as characters in a terminal"
 arch=('x86_64')
 url="https://github.com/rsd/omaquake"
 license=('GPL-2.0-only')                  # matches the Quake engine source
-makedepends=('git' 'make' 'gcc' 'pkgconf' 'libarchive')
+# chafa, libcaca and alsa-lib are runtime depends of the omaquake package
+# only, and in a split PKGBUILD per-package depends are not installed before
+# build().  The Makefile detects all three via pkg-config and silently omits a
+# backend it cannot find, so in a clean chroot they must be makedepends too or
+# the binary ships with no video backend at all.
+makedepends=('git' 'make' 'gcc' 'pkgconf' 'libarchive' 'chafa' 'libcaca' 'alsa-lib')
 
 # The engine is a submodule and makepkg will not fetch submodules itself, so
 # tyrquake is a second source entry and prepare() rewires the submodule at it.
