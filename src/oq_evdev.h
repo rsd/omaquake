@@ -22,6 +22,7 @@
 typedef enum {
     OQ_EVDEV_POINTER = 0,   /* EV_REL with REL_X+REL_Y, EV_KEY with BTN_LEFT */
     OQ_EVDEV_KEYBOARD,      /* reports keyboard keys: never opened for reading */
+    OQ_EVDEV_KBD_POINTER,   /* a keyboard's own pointer interface: rejected */
     OQ_EVDEV_NOT_POINTER,   /* lacks relative axes or buttons */
     OQ_EVDEV_UNREADABLE     /* no permission, or not an event device at all */
 } oq_evdev_verdict;
@@ -34,6 +35,9 @@ const char *oq_evdev_verdict_str(oq_evdev_verdict v);
  *
  * name receives EVIOCGNAME (NUL-terminated, may be NULL/0 to skip). */
 oq_evdev_verdict oq_evdev_classify(const char *path, char *name, size_t cap);
+
+#define OQ_EVDEV_NAME_CAP 128
+#define OQ_EVDEV_MAX_KBD  32
 
 /* Write the whole /dev/input scan and its verdicts to out; what
  * --mouse-list prints.  Diagnostic only, opens nothing for reading. */

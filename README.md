@@ -123,6 +123,15 @@ and how each was classified. Only a device with `REL_X`, `REL_Y` and
 outright even if it also looks like a pointer — many gaming mice expose a
 second keyboard node, and reading that would be keylogging.
 
+A keyboard can also expose a completely genuine *pointer* interface — a Razer
+BlackWidow presents one that udev labels `-event-mouse` with `ID_INPUT_MOUSE=1`
+and the same five buttons as a real mouse, so no capability test separates
+them. Such a node is detected by its name matching a keyboard's name exactly
+(a keyboard's pointer node carries the keyboard's own name, whereas a mouse's
+companion key node is suffixed "… Keyboard") and is skipped. Among whatever
+remains, a device named like a mouse and having a horizontal wheel wins.
+`--mouse-dev` still overrides all of this if you want a specific node.
+
 **Ctrl-G** releases the pointer and gives it back to the desktop; press it
 again to retake it. The grab is also dropped automatically whenever the
 terminal loses focus and retaken when it returns, so alt-tabbing away just

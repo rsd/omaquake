@@ -1,3 +1,4 @@
+#define _GNU_SOURCE   /* strcasestr */
 /* Raw pointer input from Linux evdev.  See oq_evdev.h for why it exists. */
 #include "oq_evdev.h"
 
@@ -46,6 +47,7 @@ const char *oq_evdev_verdict_str(oq_evdev_verdict v)
     switch (v) {
     case OQ_EVDEV_POINTER:     return "pointer";
     case OQ_EVDEV_KEYBOARD:    return "keyboard - never opened";
+    case OQ_EVDEV_KBD_POINTER: return "keyboard's pointer - rejected";
     case OQ_EVDEV_NOT_POINTER: return "not a pointer";
     case OQ_EVDEV_UNREADABLE:  return "unreadable";
     }
@@ -98,6 +100,96 @@ static oq_evdev_verdict classify_fd(int f, char *name, size_t cap)
         return OQ_EVDEV_NOT_POINTER;
 
     return OQ_EVDEV_POINTER;
+}
+
+/* Does the device report a horizontal wheel?  A keyboard's built-in pointer
+ * interface generally does not; a real mouse usually does.  Weak on its own,
+ * useful as a tie-breaker. */
+static int has_hwheel(int f)
+{
+    unsigned long relbit[NLONGS(REL_MAX + 1)];
+
+    memset(relbit, 0, sizeof(relbit));
+    if (ioctl(f, EVIOCGBIT(EV_REL, sizeof(relbit)), relbit) < 0)
+        return 0;
+    return bit_set(relbit, REL_HWHEEL) != 0;
+}
+
+/* Is this pointer really a keyboard's built-in pointer interface?
+ *
+ * A keyboard can expose a completely genuine one: a Razer BlackWidow presents
+ * it on if02, udev names it -event-mouse and sets ID_INPUT_MOUSE=1, and it
+ * advertises the same five buttons as a real mouse. No capability test can
+ * separate them, so picking the first qualifying device lands on the keyboard
+ * and aiming is dead.
+ *
+ * What does separate them is the name. A keyboard's pointer node carries the
+ * keyboard's name EXACTLY, because it is the same physical device:
+ *
+ *     event7   keyboard   "Razer Razer BlackWidow X Chroma"
+ *     event10  pointer    "Razer Razer BlackWidow X Chroma"   <- same
+ *
+ * whereas a mouse's companion key node is suffixed, so the names differ:
+ *
+ *     event11  pointer    "SINOWEALTH Game Mouse"
+ *     event12  keyboard   "SINOWEALTH Game Mouse Keyboard"    <- differs
+ *
+ * Rejecting on an exact match is generic: it needs no vendor list and no
+ * maintenance, and it catches every keyboard that does this rather than the
+ * one we happened to hit. */
+static int is_kbd_pointer(const char *name,
+                          char kbd_names[][OQ_EVDEV_NAME_CAP], int nkbd)
+{
+    int i;
+
+    for (i = 0; i < nkbd; i++)
+        if (!strcmp(name, kbd_names[i]))
+            return 1;
+    return 0;
+}
+
+/* Rank one pointer candidate.  Higher wins; ties go to the lower event
+ * number.
+ *
+ * The problem this solves: a keyboard can expose a perfectly genuine pointer
+ * interface.  A Razer BlackWidow presents one on if02 -- udev even names it
+ * -event-mouse, sets ID_INPUT_MOUSE=1, and it advertises the same five
+ * buttons as a real mouse -- so capability tests alone cannot separate them
+ * and picking the first match lands on the keyboard.
+ *
+ * Three signals, none decisive alone:
+ *   - the device name says "mouse"; a keyboard's pointer node carries the
+ *     keyboard's name.
+ *   - a real mouse tends to have a horizontal wheel.
+ *   - a keyboard's pointer node usually shares its name EXACTLY with that
+ *     keyboard's key node, whereas a mouse's companion key node is suffixed
+ *     ("SINOWEALTH Game Mouse" vs "SINOWEALTH Game Mouse Keyboard").
+ */
+static int score_pointer(int f, const char *name)
+{
+    int score = 0;
+
+    if (strcasestr(name, "mouse") || strcasestr(name, "trackball"))
+        score += 100;
+    if (has_hwheel(f))
+        score += 10;
+    return score;
+}
+
+/* Names of every keyboard on the system, for is_kbd_pointer(). */
+static int collect_kbd_names(struct dirent **list, int n,
+                             char names[][OQ_EVDEV_NAME_CAP])
+{
+    int i, nkbd = 0;
+
+    for (i = 0; i < n && nkbd < OQ_EVDEV_MAX_KBD; i++) {
+        char cand[PATH_CAP], name[OQ_EVDEV_NAME_CAP];
+
+        snprintf(cand, sizeof(cand), "%s/%s", EVDEV_DIR, list[i]->d_name);
+        if (oq_evdev_classify(cand, name, sizeof(name)) == OQ_EVDEV_KEYBOARD)
+            snprintf(names[nkbd++], OQ_EVDEV_NAME_CAP, "%s", name);
+    }
+    return nkbd;
 }
 
 oq_evdev_verdict oq_evdev_classify(const char *path, char *name, size_t cap)
@@ -156,15 +248,22 @@ void oq_evdev_list(FILE *out)
         fprintf(out, "%s\n", errbuf);
         return;
     }
-    for (i = 0; i < n; i++) {
-        char path[PATH_CAP], name[128];
-        oq_evdev_verdict v;
+    {
+        char kbd_names[OQ_EVDEV_MAX_KBD][OQ_EVDEV_NAME_CAP];
+        int nkbd = collect_kbd_names(list, n, kbd_names);
 
-        snprintf(path, sizeof(path), "%s/%s", EVDEV_DIR, list[i]->d_name);
-        v = oq_evdev_classify(path, name, sizeof(name));
-        fprintf(out, "%-22s %-24s %s\n", path, oq_evdev_verdict_str(v),
-                name[0] ? name : "(no name)");
-        free(list[i]);
+        for (i = 0; i < n; i++) {
+            char path[PATH_CAP], name[OQ_EVDEV_NAME_CAP];
+            oq_evdev_verdict v;
+
+            snprintf(path, sizeof(path), "%s/%s", EVDEV_DIR, list[i]->d_name);
+            v = oq_evdev_classify(path, name, sizeof(name));
+            if (v == OQ_EVDEV_POINTER && is_kbd_pointer(name, kbd_names, nkbd))
+                v = OQ_EVDEV_KBD_POINTER;
+            fprintf(out, "%-22s %-30s %s\n", path, oq_evdev_verdict_str(v),
+                    name[0] ? name : "(no name)");
+            free(list[i]);
+        }
     }
     free(list);
 }
@@ -197,7 +296,7 @@ static int adopt(const char *path)
 int oq_evdev_open(const char *path)
 {
     struct dirent **list;
-    int n, i, rc = -1;
+    int n, i;
 
     if (dev_fd >= 0)
         return 0;
@@ -209,20 +308,51 @@ int oq_evdev_open(const char *path)
     n = scan(&list);
     if (n < 0)
         return -1;
-    snprintf(errbuf, sizeof(errbuf),
-             "no usable pointer among %d %s/event* devices", n, EVDEV_DIR);
-    for (i = 0; i < n; i++) {
-        if (rc < 0) {
-            char cand[PATH_CAP];
+
+    {
+        char kbd_names[OQ_EVDEV_MAX_KBD][OQ_EVDEV_NAME_CAP];
+        char best_path[PATH_CAP];
+        int nkbd = 0, best = 0, best_score = 0;
+
+        /* First pass: every keyboard's name, so a pointer sharing one can be
+         * recognised as that keyboard's own pointer interface and skipped. */
+        nkbd = collect_kbd_names(list, n, kbd_names);
+
+        /* Second pass: score the pointers and keep the best. */
+        best_path[0] = '\0';
+        for (i = 0; i < n; i++) {
+            char cand[PATH_CAP], name[OQ_EVDEV_NAME_CAP];
+            int f, sc;
 
             snprintf(cand, sizeof(cand), "%s/%s", EVDEV_DIR, list[i]->d_name);
-            if (oq_evdev_classify(cand, NULL, 0) == OQ_EVDEV_POINTER)
-                rc = adopt(cand);
+            if (oq_evdev_classify(cand, name, sizeof(name)) != OQ_EVDEV_POINTER)
+                continue;
+            if (is_kbd_pointer(name, kbd_names, nkbd))
+                continue;
+            f = open(cand, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+            if (f < 0)
+                continue;
+            sc = score_pointer(f, name);
+            close(f);
+            if (!best || sc > best_score) {
+                best_score = sc;
+                best = 1;
+                snprintf(best_path, sizeof(best_path), "%s", cand);
+            }
         }
-        free(list[i]);
+
+        for (i = 0; i < n; i++)
+            free(list[i]);
+        free(list);
+
+        if (!best) {
+            snprintf(errbuf, sizeof(errbuf),
+                     "no usable pointer among %d %s/event* devices",
+                     n, EVDEV_DIR);
+            return -1;
+        }
+        return adopt(best_path);
     }
-    free(list);
-    return rc;
 }
 
 int oq_evdev_grab(void)
