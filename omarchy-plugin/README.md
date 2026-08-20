@@ -48,8 +48,14 @@ exist when the shell started is discovered by `omarchy plugin list` and written
 into `shell.json` while still never appearing on the bar. Neither
 `omarchy-shell shell rescanPlugins` nor `omarchy-shell shell reloadConfig`
 rebuilds that registry — both were tried, and the widget stayed invisible with
-no error logged anywhere. Only a full restart registers it. Once registered,
-editing the QML in place *does* hot-reload normally.
+no error logged anywhere. Only a full restart registers it.
+
+**Editing the QML in place does not hot-reload either**, whatever the shell's
+own log says. Changing `appId` in the installed copy produced
+`Local plugin changed, reloading: rsd.omaquake` in the journal, and the next
+popout still spawned under the *old* app id; only `omarchy restart shell`
+picked the edit up. Assume a restart after every QML change. Settings are the
+exception — see below.
 
 Do **not** install by symlinking: `omarchy plugin validate` rejects a symlink
 anywhere inside a plugin folder (`.git` excepted). No symlink is needed now
@@ -75,6 +81,22 @@ Set inline on the widget's entry in `~/.config/omarchy/shell.json`:
 
 Sizing is in **cells** deliberately: fixing cells rather than pixels keeps
 Quake framed identically across monitors of different scale.
+
+Unlike the QML, these **do** apply live: editing `shell.json` re-reaches the
+widget within a second or two, no restart involved. Verified by watching the
+engine probe below re-run and flip its verdict as `binary` was edited back and
+forth.
+
+## When the engine is missing
+
+A plugin cannot declare a dependency on `omaquake`. The manifest schema has no
+field for one, and `omarchy plugin add` only clones and validates — it never
+builds anything, runs a hook, or calls a package manager. So the widget checks
+for itself: a `command -v` probe (which covers both a bare name on `PATH` and
+an absolute path) runs at load and again whenever `binary` changes, and a click
+with no engine present sends a notification pointing at `makepkg -si` and this
+repo instead of opening a popout onto nothing. `launchTerminal()` carries the
+same guard, so an IPC-driven open explains itself too.
 
 ## Hyprland 0.56 notes
 
