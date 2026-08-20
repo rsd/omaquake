@@ -26,8 +26,8 @@ import qs.Commons
 Panel {
     id: root
 
-    moduleName: "raul.omaquake"
-    ipcTarget: "raul.omaquake"
+    moduleName: "rsd.omaquake"
+    ipcTarget: "rsd.omaquake"
 
     // --- tunables ------------------------------------------------------
     // Sized in terminal cells; the pixel geometry is whatever foot decides
@@ -69,7 +69,7 @@ Panel {
                 color: button.foreground
             }
         }
-        onPressed: function (b) { root.toggle() }
+        onPressed: function (b) { root.activate() }
     }
 
     // --- the surface the hole lives in ---------------------------------
@@ -160,6 +160,45 @@ Panel {
         }
     }
 
+    // --- the engine binary ----------------------------------------------
+    // A plugin cannot declare a dependency on it: the manifest schema has no
+    // field for one, and `omarchy plugin add` only clones and validates -- it
+    // never builds anything, runs a hook, or calls a package manager. So a
+    // missing engine has to be diagnosed here, where there is still someone to
+    // tell, rather than showing up as a chrome ring over an empty hole that
+    // the watchdog clears five seconds later with no explanation.
+    property bool binaryMissing: false
+
+    Process {
+        id: binaryProbe
+        // `command -v` resolves a bare name on PATH and also accepts an
+        // absolute path, so one probe covers both forms the setting can take.
+        command: ["sh", "-c", "command -v -- \"$1\" >/dev/null 2>&1", "sh", root.binary]
+        onExited: function (code) { root.binaryMissing = code !== 0 }
+    }
+
+    Process {
+        id: installHint
+        command: ["omarchy-notification-send", "-u", "normal", "-g", "\uf11b",
+                  "OmaQuake engine not installed",
+                  "No '" + root.binary + "' found. Build it with `makepkg -si` in "
+                  + "the repo's packaging/ directory, or point this widget's "
+                  + "\"binary\" setting at your own build: "
+                  + "https://github.com/rsd/omaquake"]
+    }
+
+    // Re-probe on every rejected click: the engine may have been installed
+    // since the last one, and the alternative is telling someone to install
+    // software they just installed.
+    function activate() {
+        if (root.binaryMissing) {
+            installHint.running = true
+            binaryProbe.running = true
+            return
+        }
+        root.toggle()
+    }
+
     // --- terminal lifecycle --------------------------------------------
     // Spawned through Hyprland's exec-with-rules because that is the one
     // dispatcher form that still parses on 0.56 (it replaced hyprctl's
@@ -195,6 +234,16 @@ Panel {
     // command never runs -- which silently skipped the kill and left the
     // terminal alive on screen after the chrome had already come down.
     function launchTerminal() {
+        // Also guarded here, not just on the bar click: an IPC-driven open
+        // never goes through activate(), and would otherwise sit there until
+        // the watchdog killed it without saying why.
+        if (root.binaryMissing) {
+            installHint.running = true
+            binaryProbe.running = true
+            root.close()
+            return
+        }
+
         var cmd = "foot --app-id=" + root.appId + " -o colors.alpha=1.0"
         if (root.gameDir !== "") cmd += " -D " + root.gameDir
         cmd += " -- " + root.binary + " " + root.gameArgs.join(" ")
@@ -262,6 +311,9 @@ Panel {
 
     // A stranded terminal outlives a shell restart: it is floating, pinned and
     // has no chrome of its own, so it would sit on top of everything forever.
-    Component.onCompleted: killTerminal()
+    Component.onCompleted: {
+        killTerminal()
+        binaryProbe.running = true
+    }
     Component.onDestruction: killTerminal()
 }

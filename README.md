@@ -37,6 +37,25 @@ Presentation and audio backends are optional and detected via `pkg-config`
 compiled into the binary — trust that output over anything below, since a
 backend can be silently absent if its `-dev`/pkg-config file is missing.
 
+### As an Arch package
+
+`packaging/PKGBUILD` builds two packages: `omaquake` (the binary) and
+`omaquake-shareware-data` (the freely redistributable `pak0.pak`, fetched and
+extracted at build time — see [Game data](#game-data)).
+
+    cd packaging
+    makepkg -si         # -s pulls the build dependencies, -i installs the result
+
+`makepkg` builds from the **tag** named in `source=()`, not from your working
+tree, so local edits are not in the package until they are committed, tagged,
+and the pin is moved. It fetches the 9 MB shareware archive even if you only
+want the binary package; `source=()` is per-pkgbase, so there is no way to skip
+it.
+
+Installed that way, `omaquake` needs no arguments: the data package puts the
+pak at `/usr/share/omaquake/id1/pak0.pak`, which is already on the search path
+below.
+
 ## Game data
 
 Not included. The freely redistributable shareware release ships
@@ -70,6 +89,9 @@ replaced by a search result.
 
 The full game's `pak1.pak` requires owning Quake and is not distributed
 here.
+
+None of this is necessary if you installed `omaquake-shareware-data` — it does
+exactly the above at package build time.
 
 ## Running
 

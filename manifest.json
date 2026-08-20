@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "raul.omaquake",
+  "id": "rsd.omaquake",
   "name": "OmaQuake",
   "version": "0.1.0",
   "author": "Raul Dias",
@@ -9,7 +9,7 @@
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "omarchy-plugin/Panel.qml"
   },
   "barWidget": {
     "displayName": "OmaQuake",

@@ -23,11 +23,24 @@ it is inside a panel.
 ## Install
 
 ```
-cp -r omarchy-plugin ~/.config/omarchy/plugins/raul.omaquake
-omarchy plugin validate ~/.config/omarchy/plugins/raul.omaquake
-omarchy plugin enable raul.omaquake
+omarchy plugin add https://github.com/rsd/omaquake.git --enable
 omarchy restart shell
 ```
+
+`manifest.json` sits at the **repo root**, not in this directory. `omarchy
+plugin add` clones a URL and validates the clone root, and there is no
+subdirectory or branch-path syntax to point it deeper. Entry points, though,
+may be any safe relative path, so the manifest stays at the root and names
+`omarchy-plugin/Panel.qml`; the QML lives here. The whole engine repo is what
+lands in `~/.config/omarchy/plugins/rsd.omaquake/` -- about 550 KB, since
+`plugin add` does not fetch submodules.
+
+If a copy-installed `rsd.omaquake` is already present, `add` refuses the id;
+`omarchy plugin remove rsd.omaquake` first.
+
+Installing by hand means cloning the repo to
+`~/.config/omarchy/plugins/rsd.omaquake/`, not copying this directory --
+copying it alone leaves the manifest behind.
 
 **The restart is not optional for a newly added plugin.** The bar resolves
 widgets through a registry built at shell startup, so a plugin that did not
@@ -38,12 +51,13 @@ rebuilds that registry — both were tried, and the widget stayed invisible with
 no error logged anywhere. Only a full restart registers it. Once registered,
 editing the QML in place *does* hot-reload normally.
 
-Do **not** install by symlinking the directory: `omarchy plugin validate`
-rejects it outright with `symlinks are not allowed inside a plugin folder`.
-Develop by editing the installed copy under `~/.config/omarchy/plugins/` and
-copying back, or copy forward after each edit.
+Do **not** install by symlinking: `omarchy plugin validate` rejects a symlink
+anywhere inside a plugin folder (`.git` excepted). No symlink is needed now
+anyway -- the installed plugin *is* a clone of this repo, so develop in
+`~/.config/omarchy/plugins/rsd.omaquake/` directly and push from there. QML
+edits hot-reload in place once the plugin is registered.
 
-Remove with `omarchy plugin remove raul.omaquake`.
+Remove with `omarchy plugin remove rsd.omaquake`.
 
 ## Settings
 
@@ -105,6 +119,6 @@ Known gaps:
   behind its content and would fill the hole. The chrome here is hand-rolled,
   so it tracks the theme only through `Color.popups.*`.
 - The terminal is a real toplevel, so it appears in the window list.
-- This directory is not a standalone git repo, so `omarchy plugin add <url>`
-  cannot install it directly from the OmaQuake repository — the manifest has
-  to sit at a repo root. Install by copy for now.
+- Installing pulls the engine's git history along with the QML; the plugin's
+  version therefore moves whenever the engine is tagged. A standalone plugin
+  repo would separate the two, at the cost of maintaining two repos.
