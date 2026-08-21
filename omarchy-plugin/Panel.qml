@@ -110,11 +110,6 @@ Panel {
         }
         readonly property int holeY: Math.round(barH + root.gap)
 
-        // Global compositor coordinates for Hyprland. Verified 1:1 with
-        // logical coords on a scale-2 output.
-        readonly property int globalX: (surface.screen ? surface.screen.x : 0) + holeX
-        readonly property int globalY: (surface.screen ? surface.screen.y : 0) + holeY
-
         mask: Region {
             x: surface.holeX - root.padding
             y: surface.holeY - root.padding
@@ -141,8 +136,8 @@ Panel {
             width: root.termW + root.padding * 2
             height: root.termH + root.padding * 2
 
-            readonly property color chrome: Color ? Color.popups.background : "#1a1b26"
-            readonly property color edge: Color ? Color.popups.border : "#7aa2f7"
+            readonly property color chrome: Color.popups.background
+            readonly property color edge: Color.popups.border
 
             Rectangle { x: 0; y: 0; width: parent.width; height: root.padding; color: frame.chrome }
             Rectangle { x: 0; y: parent.height - root.padding; width: parent.width; height: root.padding; color: frame.chrome }
@@ -201,9 +196,9 @@ Panel {
         id: installHint
         command: ["omarchy-notification-send", "-u", "normal", "-g", "\uf11b",
                   "OmaQuake engine not installed",
-                  "No '" + root.binary + "' found. Build it with `makepkg -si` in "
-                  + "the repo's packaging/ directory, or point this widget's "
-                  + "\"binary\" setting at your own build: "
+                  "No '" + root.binary + "' found. Install it with "
+                  + "`yay -S omaquake omaquake-shareware-data`, or point this "
+                  + "widget's \"binary\" setting at your own build: "
                   + "https://github.com/rsd/omaquake"]
     }
 
@@ -278,11 +273,17 @@ Panel {
         var mon = surface.screen ? surface.screen.name : ""
         var lx = surface.holeX
         var ly = surface.holeY
-        return "[float; pin; noanim; noborder; rounding 0; "
-             + "opacity 1.0 override 1.0 override; "
-             + "monitor " + mon + "; "
-             + "size " + root.termW + " " + root.termH + "; "
-             + "move " + lx + " " + ly + "]"
+        var rule = "[float; pin; noanim; noborder; rounding 0; "
+                 + "opacity 1.0 override 1.0 override; "
+        // screen is null until the bar window resolves, and a null screen
+        // would emit a `monitor ;` clause with no argument -- a malformed rule
+        // in a set that Hyprland parses as a whole. Dropping the clause instead
+        // lands the window on the active monitor, which for a bar click is the
+        // monitor that was clicked anyway.
+        if (mon !== "") rule += "monitor " + mon + "; "
+        rule += "size " + root.termW + " " + root.termH + "; "
+        rule += "move " + lx + " " + ly + "]"
+        return rule
     }
 
     // --no-mouse matters: omaquake's evdev pointer path takes EVIOCGRAB, which
@@ -302,6 +303,20 @@ Panel {
         return a
     }
 
+    // Quoting for the SHELL layer, and only that layer. Hyprland runs both
+    // `exec` and `hl.dsp.exec_cmd` arguments through `sh -c`, and the wrappers
+    // in between do not protect it -- `"$1"` keeps the OUTER sh from splitting
+    // the string and the Lua long bracket keeps Lua from reading it, but both
+    // hand their contents to that final shell verbatim. So a setting holding a
+    // space silently breaks the launch and one holding `;` or a backtick runs
+    // as a command. Every value that comes from settings is therefore
+    // single-quoted here, at the last point before the join.
+    //
+    // This says nothing about the LUA lexer, which sees the payload before any
+    // shell does: single quotes mean nothing to it, and it is closed by `]==]`,
+    // not by a quote. launchTerminal() handles that layer separately.
+    function sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+
     // Fire-and-forget rather than a Process with a `running` flag. Driving a
     // reused Process by assigning running=false and then true in the same
     // event-loop turn can coalesce into no property change at all, so the
@@ -318,9 +333,25 @@ Panel {
             return
         }
 
+        // appId is a constant here, never a setting, so it needs no quoting.
         var cmd = "foot --app-id=" + root.appId + " -o colors.alpha=1.0"
-        if (root.gameDir !== "") cmd += " -D " + root.gameDir
-        cmd += " -- " + root.binary + " " + root.gameArgs.join(" ")
+        if (root.gameDir !== "") cmd += " -D " + sq(root.gameDir)
+        cmd += " -- " + sq(root.binary) + " " + root.gameArgs.map(sq).join(" ")
+
+        var payload = root.spawnRule + " " + cmd
+
+        // Second escaping layer, for Lua rather than for sh: on the dispatcher
+        // branch below the payload is spliced into a long-bracket literal, and
+        // a setting containing that literal's closing delimiter would end it
+        // early and leave the remainder to run as Lua inside the compositor --
+        // which answers `ok`, so the fallback would not fire either. sq()
+        // cannot help: `]==]` inside single quotes is still `]==]` to the Lua
+        // lexer. Long brackets take an arbitrary number of `=`, so pick a level
+        // the payload does not contain and the literal cannot be closed early.
+        var eq = "=="
+        while (payload.indexOf("]" + eq + "]") !== -1) eq += "="
+        var lopen = "[" + eq + "["
+        var lclose = "]" + eq + "]"
 
         // Which spelling of `hyprctl dispatch` works depends on which config
         // manager Hyprland 0.56 was started with, and the widget cannot know.
@@ -330,13 +361,16 @@ Panel {
         // bare `[...]` -- and the terminal never spawns; under a hyprlang
         // config there is no `hl.dsp` table at all and only the classic form
         // works. Hence: try the Lua dispatcher, and on any reply that is not
-        // `ok` fall back. The spec goes in as $1 and is handed to Lua inside a
-        // long bracket, which needs no escaping of the rule's brackets,
-        // spaces or quotes.
+        // `ok` fall back. The spec goes in as $1 and is handed to Lua inside
+        // the long bracket sized above, which needs no escaping of the rule's
+        // brackets, spaces or quotes -- and performs no unescaping either,
+        // which is why the shell quoting applied in sq() is what protects the
+        // command from Hyprland's own `sh -c`.
         Quickshell.execDetached(["sh", "-c",
-                                 "out=$(hyprctl dispatch \"hl.dsp.exec_cmd([==[$1]==])\" 2>&1); "
-                                 + "case $out in ok*) ;; *) hyprctl dispatch exec \"$1\" ;; esac",
-                                 "sh", root.spawnRule + " " + cmd])
+                                 "out=$(hyprctl dispatch \"hl.dsp.exec_cmd("
+                                 + lopen + "$1" + lclose + ")\" 2>&1); "
+                                 + "case \"$out\" in ok*) ;; *) hyprctl dispatch exec \"$1\" ;; esac",
+                                 "sh", payload])
     }
 
     // pkill never signals itself, so matching our own app id is safe here.

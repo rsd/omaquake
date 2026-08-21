@@ -60,8 +60,9 @@ build() {
 
 check() {
   cd "$srcdir/$pkgbase"
-  # Renders one frame of the test pattern; needs no game data.
-  # TODO: needs a pty, so this must run under `script` or be dropped.
+  # Only proves the binary links and starts: --help prints usage and exits
+  # before oq_term_init(), so it needs neither game data nor a tty.
+  # TODO: a real render check needs a pty, so it must run under `script`.
   ./build/omaquake --help >/dev/null
 }
 

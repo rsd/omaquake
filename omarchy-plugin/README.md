@@ -60,8 +60,7 @@ exception — see below.
 Do **not** install by symlinking: `omarchy plugin validate` rejects a symlink
 anywhere inside a plugin folder (`.git` excepted). No symlink is needed now
 anyway -- the installed plugin *is* a clone of this repo, so develop in
-`~/.config/omarchy/plugins/rsd.omaquake/` directly and push from there. QML
-edits hot-reload in place once the plugin is registered.
+`~/.config/omarchy/plugins/rsd.omaquake/` directly and push from there.
 
 Remove with `omarchy plugin remove rsd.omaquake`.
 
@@ -79,6 +78,11 @@ Set inline on the widget's entry in `~/.config/omarchy/shell.json`:
 | `gameDir` | *(none)* | Working directory holding `id1/` |
 | `pak` | *(none)* | Path to `pak0.pak`; omit to let omaquake search its usual places, falling back to the test pattern if nothing is found |
 
+Leaving `pak` unset is the normal case: `omaquake-shareware-data` (installed
+alongside the engine by `yay -S omaquake omaquake-shareware-data`) drops
+`pak0.pak` in `/usr/share/omaquake/id1/`, which is already on the engine's
+search path, so a stock install plays with no settings at all.
+
 Sizing is in **cells** deliberately: fixing cells rather than pixels keeps
 Quake framed identically across monitors of different scale.
 
@@ -94,9 +98,10 @@ field for one, and `omarchy plugin add` only clones and validates — it never
 builds anything, runs a hook, or calls a package manager. So the widget checks
 for itself: a `command -v` probe (which covers both a bare name on `PATH` and
 an absolute path) runs at load and again whenever `binary` changes, and a click
-with no engine present sends a notification pointing at `makepkg -si` and this
-repo instead of opening a popout onto nothing. `launchTerminal()` carries the
-same guard, so an IPC-driven open explains itself too.
+with no engine present sends a notification pointing at
+`yay -S omaquake omaquake-shareware-data` and this repo instead of opening a
+popout onto nothing. `launchTerminal()` carries the same guard, so an
+IPC-driven open explains itself too.
 
 ## Hyprland 0.56 notes
 
@@ -139,8 +144,6 @@ strand a chrome ring over an empty hole.
 
 Known gaps:
 
-- Input pass-through through the `mask` is designed but **not yet verified**
-  end to end; the compositing half is confirmed by screenshot.
 - A popout opened over IPC onto a monitor that is not the focused one never
   takes focus, so it never arms, and the watchdog closes it after 5s. Opening by
   clicking the bar icon does not have this problem — the click focuses that

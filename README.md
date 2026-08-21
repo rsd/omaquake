@@ -56,6 +56,21 @@ Installed that way, `omaquake` needs no arguments: the data package puts the
 pak at `/usr/share/omaquake/id1/pak0.pak`, which is already on the search path
 below.
 
+## Omarchy plugin
+
+`omarchy-plugin/` is a bar widget for Omarchy 4 that drops Quake out of the
+top bar, Quake-console style. The popout is not a QML terminal: it is a real
+`foot` window running this binary, positioned by Hyprland behind a transparent
+hole in a layer-shell surface.
+
+    omarchy plugin add https://github.com/rsd/omaquake.git --enable
+    omarchy restart shell
+
+The manifest lives at the repo root, so `plugin add` clones the whole engine
+repo; the widget itself only needs `omaquake` on `PATH`. See
+[omarchy-plugin/README.md](omarchy-plugin/README.md) for settings, the
+Hyprland 0.56 quirks it works around, and the known gaps.
+
 ## Game data
 
 Not included. The freely redistributable shareware release ships
