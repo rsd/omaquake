@@ -224,7 +224,41 @@ Panel {
     // the omaquake-shareware-data package drops pak0.pak) among others, so
     // only the binary knows whether a game exists -- `--find-pak` asks it, and
     // answers with exit 0 when it found data.
+
+    // A `pak` that begins with `-` is refused and treated as unset. The value
+    // is pushed into gameArgs raw and omaquake has no `--` end-of-options
+    // terminator, so `"pak": "--log=/home/u/.zshrc"` would not be read as a
+    // (missing) file at all -- it would be read as an engine option, and that
+    // one truncates the named file. The guard has to live in the widget for
+    // exactly that reason: by the time the argument reaches the engine there is
+    // nothing left that can tell a path from a flag.
+    function looksLikeOption(s) { return s !== "" && String(s).charAt(0) === "-" }
+    readonly property string pakArg: root.looksLikeOption(root.pak) ? "" : root.pak
+
+    Process {
+        id: pakOptionHint
+        command: ["omarchy-notification-send", "-u", "normal", "-g", "\uf11b",
+                  "OmaQuake: \"pak\" setting ignored",
+                  "'" + root.pak + "' starts with '-', so the engine would read "
+                  + "it as an option rather than as game data. Point \"pak\" at "
+                  + "a pak file, or remove it to let omaquake search."]
+    }
+
     property bool pakFound: false
+
+    // Said once per shell session, not once per click: the fallback is a
+    // playable test pattern, not an error, and a notification on every open
+    // would be noise. Cleared again below if data ever shows up, so installing
+    // the data package and then removing it says it again.
+    property bool dataHintShown: false
+
+    Process {
+        id: dataHint
+        command: ["omarchy-notification-send", "-u", "normal", "-g", "\uf11b",
+                  "OmaQuake: no game data found",
+                  "Showing the test pattern. Install `omaquake-shareware-data` "
+                  + "or set the widget's \"pak\" setting."]
+    }
 
     Process {
         id: pakProbe
@@ -232,7 +266,18 @@ Panel {
         // deliberately also covers an engine older than --find-pak: it answers
         // an unknown flag with usage and exit 2, and the widget then falls back
         // to --demo exactly as it always did.
-        onExited: function (code) { root.pakFound = code === 0 }
+        onExited: function (code) {
+            root.pakFound = code === 0
+            // Only reached through a binary probe that succeeded, so a missing
+            // engine cannot land here -- that case has its own hint, and saying
+            // both would be two notifications for one problem.
+            if (!root.pakFound && !root.dataHintShown) {
+                dataHint.running = true
+                root.dataHintShown = true
+            } else if (root.pakFound) {
+                root.dataHintShown = false
+            }
+        }
     }
 
     // Assigned in a function rather than bound, for the same reason as
@@ -248,7 +293,7 @@ Panel {
     function probePak() {
         // With `pak` set there is nothing to discover: gameArgs passes the
         // configured path straight through, and nothing reads pakFound.
-        if (root.pak !== "" || root.binaryMissing) return
+        if (root.pakArg !== "" || root.binaryMissing) return
         pakProbe.workingDirectory = root.gameDir
         pakProbe.command = [root.binary, "--find-pak", "--no-sound"]
         pakProbe.running = true
@@ -258,7 +303,18 @@ Panel {
     // into "data" without the binary itself changing. A change to `binary`
     // re-probes through binaryProbe.onExited instead, which is the only moment
     // the new path is known to be runnable.
-    onPakChanged: probePak()
+    //
+    // The rejection notice rides on `pak` itself rather than on a "rejected"
+    // flag: editing one bad value into a different bad value leaves such a flag
+    // true throughout, and the silence would read as "fixed". `pak` only
+    // signals when the string actually differs, so this cannot spam. It is also
+    // why the test is recomputed here instead of read off a bound property --
+    // this handler and that binding react to the same change in an order QML
+    // does not promise (the same trap probeBinary() above sidesteps).
+    onPakChanged: {
+        if (root.looksLikeOption(root.pak)) pakOptionHint.running = true
+        probePak()
+    }
     onGameDirChanged: probePak()
 
     // --- terminal lifecycle --------------------------------------------
@@ -289,16 +345,17 @@ Panel {
     // --no-mouse matters: omaquake's evdev pointer path takes EVIOCGRAB, which
     // would steal the pointer from the whole desktop while the popout is open.
     //
-    // A configured `pak` wins. Otherwise the binary is left to find the data on
-    // its own (see probePak), and --demo is the last resort for the one case
-    // that is genuinely unplayable: engine present, data nowhere. So a fresh
-    // install of omaquake plus omaquake-shareware-data shows Quake with zero
-    // configuration, and only a machine without a pak gets the test pattern --
-    // which is still needed, because omaquake exits on usage if handed neither
-    // game data nor --demo.
+    // A configured `pak` wins -- unless the guard on pakArg threw it out, in
+    // which case this behaves exactly as if none had been set. Otherwise the
+    // binary is left to find the data on its own (see probePak), and --demo is
+    // the last resort for the one case that is genuinely unplayable: engine
+    // present, data nowhere. So a fresh install of omaquake plus
+    // omaquake-shareware-data shows Quake with zero configuration, and only a
+    // machine without a pak gets the test pattern -- which is still needed,
+    // because omaquake exits on usage if handed neither game data nor --demo.
     readonly property var gameArgs: {
         var a = ["--no-sound", "--no-mouse"]
-        if (root.pak !== "") a.push(root.pak)
+        if (root.pakArg !== "") a.push(root.pakArg)
         else if (!root.pakFound) a.push("--demo")
         return a
     }
@@ -373,9 +430,39 @@ Panel {
                                  "sh", payload])
     }
 
-    // pkill never signals itself, so matching our own app id is safe here.
+    // Kills EVERY Hyprland client whose class is exactly our app id, by pid.
+    //
+    // Killing every window of that class is deliberate, not collateral: the
+    // Component.onCompleted sweep below exists to reap a terminal stranded by
+    // a shell restart, which by definition belongs to no instance still
+    // running. The narrowing here is substring vs exact, nothing else. This
+    // was `pkill -f app-id=omaquake-popout`, and `-f` matches any process of
+    // this user whose whole command line merely CONTAINS that string -- an
+    // editor with this file open, a `foot --app-id=omaquake-popout-debug`, the
+    // grep someone ran looking for it. None of those are windows of ours.
+    //
+    // There is no pid to remember instead: the terminal is spawned by Hyprland
+    // through `hyprctl dispatch`, not by Quickshell, so the compositor's client
+    // list is the only place its pid exists. No match means no window of ours
+    // is up, and nothing is signalled.
+    //
+    // execDetached rather than a Process, for two reasons: this also runs from
+    // Component.onDestruction, where a Process owned by this component would be
+    // torn down before it could answer, and the call sites are fire-and-forget
+    // (see launchTerminal for why a reused Process is avoided here).
     function killTerminal() {
-        Quickshell.execDetached(["pkill", "-f", "app-id=" + root.appId])
+        // jq does the exact comparison -- Omarchy ships it. The app id travels
+        // as an argument to both sh and jq rather than being spliced into
+        // either program's text; it is a constant here, but the shape is the
+        // one that stays safe if it ever becomes a setting.
+        Quickshell.execDetached(["sh", "-c",
+                                 "pids=$(hyprctl -j clients 2>/dev/null | jq -r --arg id \"$1\" "
+                                 + "'.[] | select(.initialClass == $id or .class == $id) | .pid'); "
+                                 // Unquoted on purpose: several matching
+                                 // windows mean several pids, and they are
+                                 // digits out of jq, not user input.
+                                 + "[ -n \"$pids\" ] && kill $pids",
+                                 "sh", root.appId])
     }
 
     // --- close on focus loss -------------------------------------------

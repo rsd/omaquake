@@ -81,7 +81,13 @@ Set inline on the widget's entry in `~/.config/omarchy/shell.json`:
 Leaving `pak` unset is the normal case: `omaquake-shareware-data` (installed
 alongside the engine by `yay -S omaquake omaquake-shareware-data`) drops
 `pak0.pak` in `/usr/share/omaquake/id1/`, which is already on the engine's
-search path, so a stock install plays with no settings at all.
+search path, so a stock install plays with no settings at all. If nothing is
+found, the widget says so once per shell session and plays the test pattern.
+
+A `pak` value starting with `-` is refused, notified about, and treated as
+unset: the value is handed to the engine as a bare argument and `omaquake` has
+no `--` end-of-options terminator, so `"pak": "--log=~/.zshrc"` would be read
+as an option — one that truncates the named file — rather than as a path.
 
 Sizing is in **cells** deliberately: fixing cells rather than pixels keeps
 Quake framed identically across monitors of different scale.
@@ -105,7 +111,7 @@ IPC-driven open explains itself too.
 
 ## Hyprland 0.56 notes
 
-Two behaviours this plugin has to work around, both found the hard way:
+Three behaviours this plugin has to work around, all found the hard way:
 
 - **`move X Y` in a window rule is monitor-relative, not global.** Asking for
   `660,32` on a multi-monitor layout lands at the active monitor's origin plus
@@ -124,6 +130,15 @@ Two behaviours this plugin has to work around, both found the hard way:
   `/usr/local/bin` that rewrote the classic form on the fly; a stock Omarchy 4
   install has no such shim, and there the popout flashed its chrome and died
   on the 5 s watchdog. Test dispatch behaviour against `/usr/bin/hyprctl`.
+- **The terminal is spawned by the compositor, so there is no pid to keep.**
+  Teardown therefore asks `hyprctl -j clients` for the windows whose class is
+  *exactly* `omaquake-popout` and kills those pids. Not
+  `pkill -f app-id=omaquake-popout`: `-f` matches any of this user's processes
+  whose whole command line merely contains that string — an editor with
+  `Panel.qml` open, a `foot --app-id=omaquake-popout-debug`, the grep you ran
+  looking for it. Every window of that class *is* still killed, deliberately:
+  the sweep at load exists to reap a terminal stranded by a shell restart,
+  which belongs to no instance still running.
 
 Windows are also translucent by default under Omarchy's rules, hence the
 `opacity 1.0 override` in the spawn rule and `-o colors.alpha=1.0` on foot.
