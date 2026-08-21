@@ -215,10 +215,11 @@ Panel {
     }
 
     // --- terminal lifecycle --------------------------------------------
-    // Spawned through Hyprland's exec-with-rules because that is the one
-    // dispatcher form that still parses on 0.56 (it replaced hyprctl's
-    // argument parsing with a Lua dispatcher API, so `dispatch
-    // movewindowpixel ...` and friends now fail). `move` in a window rule is
+    // Spawned through Hyprland's exec-with-rules: 0.56 gained a Lua dispatcher
+    // API, and classic per-window dispatchers (`dispatch movewindowpixel exact
+    // X Y,address:0x...` and friends) no longer parse under it, so the geometry
+    // has to travel with the spawn as window rules. See launchTerminal() for
+    // how the request itself is spelled. `move` in a window rule is
     // MONITOR-RELATIVE, so the rule pins the monitor by name and passes
     // monitor-local coordinates.
     readonly property string spawnRule: {
@@ -263,8 +264,21 @@ Panel {
         if (root.gameDir !== "") cmd += " -D " + root.gameDir
         cmd += " -- " + root.binary + " " + root.gameArgs.join(" ")
 
-        Quickshell.execDetached(["hyprctl", "dispatch", "exec",
-                                 root.spawnRule + " " + cmd])
+        // Which spelling of `hyprctl dispatch` works depends on which config
+        // manager Hyprland 0.56 was started with, and the widget cannot know.
+        // Under the Lua manager (Omarchy 4's default) a dispatch request is
+        // compiled as `return hl.dispatch(<request>)`, so a classic
+        // `exec [float; pin; ...] cmd` is a Lua syntax error -- `;` inside a
+        // bare `[...]` -- and the terminal never spawns; under a hyprlang
+        // config there is no `hl.dsp` table at all and only the classic form
+        // works. Hence: try the Lua dispatcher, and on any reply that is not
+        // `ok` fall back. The spec goes in as $1 and is handed to Lua inside a
+        // long bracket, which needs no escaping of the rule's brackets,
+        // spaces or quotes.
+        Quickshell.execDetached(["sh", "-c",
+                                 "out=$(hyprctl dispatch \"hl.dsp.exec_cmd([==[$1]==])\" 2>&1); "
+                                 + "case $out in ok*) ;; *) hyprctl dispatch exec \"$1\" ;; esac",
+                                 "sh", root.spawnRule + " " + cmd])
     }
 
     // pkill never signals itself, so matching our own app id is safe here.

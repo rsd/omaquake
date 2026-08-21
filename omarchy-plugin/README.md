@@ -106,11 +106,19 @@ Two behaviours this plugin has to work around, both found the hard way:
   `660,32` on a multi-monitor layout lands at the active monitor's origin plus
   that offset. The spawn rule therefore pins `monitor <name>` and passes
   monitor-local coordinates.
-- **`hyprctl dispatch` now compiles its arguments as Lua** (`hl.dispatch(...)`,
-  wanting the `hl.dsp.*` dispatcher API). Classic forms such as
-  `dispatch movewindowpixel exact X Y,address:0x…` fail outright.
-  `dispatch exec "[rules] cmd"` still parses, which is why spawning goes
-  through it.
+- **`hyprctl dispatch` is read as Lua under the Lua config manager** — Omarchy
+  4's default. The request is compiled verbatim as `return hl.dispatch(...)`,
+  wanting the `hl.dsp.*` API, so classic forms such as
+  `dispatch movewindowpixel exact X Y,address:0x…` fail outright, and
+  `dispatch exec [float; pin; …] cmd` is a Lua *syntax* error (`;` inside a
+  bare `[...]`). The classic spelling only parses under a hyprlang config,
+  which in turn has no `hl.dsp` table. The plugin therefore spawns with
+  `hl.dsp.exec_cmd("[rules] cmd")` and falls back to the classic form whenever
+  that reply is not `ok`. This went unnoticed for a while because the
+  development machine carries a local `hyprctl` legacy-compat shim in
+  `/usr/local/bin` that rewrote the classic form on the fly; a stock Omarchy 4
+  install has no such shim, and there the popout flashed its chrome and died
+  on the 5 s watchdog. Test dispatch behaviour against `/usr/bin/hyprctl`.
 
 Windows are also translucent by default under Omarchy's rules, hence the
 `opacity 1.0 override` in the spawn rule and `-o colors.alpha=1.0` on foot.
