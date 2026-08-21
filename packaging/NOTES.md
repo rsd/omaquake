@@ -45,7 +45,7 @@ pak. Three things had to be right to get there, all easy to undo by accident:
 - `alsa-lib` is a genuine link-time dependency of the binary, not merely an
   optional backend. namcap catches it if it goes missing.
 
-The source is pinned to the `v0.1.1` tag. Bumping `pkgver` means tagging
+The source is pinned to the `v0.1.2` tag. Bumping `pkgver` means tagging
 first and moving the `#tag=` too.
 
 Two loose ends, neither a blocker:
