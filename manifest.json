@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "rsd.omaquake",
   "name": "OmaQuake",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Raul Dias",
   "description": "Quake 1 as characters, in a real terminal behind a bar popout",
   "kinds": [

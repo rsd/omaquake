@@ -27,6 +27,8 @@ static void usage(const char *argv0)
         "  --symbols=SET    ascii | block | fine        (default: fine)\n"
         "  --color=DEPTH    mono | 16 | 256 | true      (default: true)\n"
         "  --demo           render a test pattern instead of the game\n"
+        "  --find-pak       print the pak0.pak a normal run would load, then\n"
+        "                   exit; exit status 1 and nothing on stdout when none exists\n"
         "  --keytest        show decoded key events; diagnoses input problems\n"
         "  --frames=N       stop after N frames (demo/benchmark)\n"
         "  --cell=WxH       character cell pixel size (default 10x20)\n"
@@ -622,6 +624,31 @@ static int run_game(const oq_present_backend *be, oq_present_config *cfg,
     return 0;
 }
 
+/* Resolve the game data the way a normal run does, and explain the failure
+ * with the full list of places searched.  Shared by startup and --find-pak so
+ * the two can never disagree about what counts as "found". */
+static int resolve_pak(const char *game, char *pak, size_t pakcap)
+{
+    static char tried[2048];
+
+    if (!oq_find_pak(game, pak, pakcap, tried, sizeof(tried)))
+        return 0;
+
+    if (game)
+        fprintf(stderr, "omaquake: no pak0.pak at '%s'\n", game);
+    else
+        fprintf(stderr, "omaquake: could not find pak0.pak\n");
+    if (tried[0])
+        fprintf(stderr, "looked in:\n%s", tried);
+    fprintf(stderr,
+        "\nThe pak must sit in a directory named id1 -- the engine\n"
+        "locates the rest of the game relative to it.\n"
+        "Put it at ./id1/pak0.pak, or ~/.local/share/omaquake/id1/,\n"
+        "or pass a path, or set OMAQUAKE_PAK.\n"
+        "The shareware data is freely redistributable: see README.md\n");
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
     const char *video = "chafa";
@@ -633,6 +660,7 @@ int main(int argc, char **argv)
     oq_mouse_config mc;
     const char *mouse_dev = NULL;
     int demo = 0, keytest = 0, nframes = 0, sound = 1, i, rc;
+    int find_pak = 0;
     int fps = 30, cap_cols = -1, cap_rows = -1;
     int mouse_mode = MOUSE_AUTO, edge_given = 0, turn_given = 0;
 
@@ -726,6 +754,8 @@ int main(int argc, char **argv)
             keytest = 1;
         } else if (!strcmp(a, "--demo")) {
             demo = 1;
+        } else if (!strcmp(a, "--find-pak")) {
+            find_pak = 1;
         } else if (!strcmp(a, "--help")) {
             usage(argv[0]);
             return 0;
@@ -737,6 +767,24 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Answered after the whole command line is parsed, so a positional path
+     * and OMAQUAKE_PAK count exactly as they would in a real run.  Writing to
+     * stdout is safe here only because we return before oq_term_init(): the
+     * terminal never enters presentation mode on this path.
+     *
+     * The Omarchy widget (omarchy-plugin/Panel.qml) launches the real game or
+     * --demo based on this exit status.  A binary older than this flag answers
+     * it with usage() and exit 2, so callers must read any non-zero status as
+     * "no pak", not as "the search failed". */
+    if (find_pak) {
+        static char pak[1024];
+
+        if (resolve_pak(game, pak, sizeof(pak)))
+            return 1;
+        printf("%s\n", pak);
+        return 0;
+    }
+
     be = oq_present_lookup(video);
     if (!be) {
         fprintf(stderr, "omaquake: no such video backend '%s' (have: %s)\n",
@@ -746,23 +794,10 @@ int main(int argc, char **argv)
     if (!demo && !keytest) {
         /* Finding the data is not the player's job. Search the usual places
          * and only complain, with the list, when there is nothing to find. */
-        static char pak[1024], tried[2048];
+        static char pak[1024];
 
-        if (oq_find_pak(game, pak, sizeof(pak), tried, sizeof(tried))) {
-            if (game)
-                fprintf(stderr, "omaquake: no pak0.pak at '%s'\n", game);
-            else
-                fprintf(stderr, "omaquake: could not find pak0.pak\n");
-            if (tried[0])
-                fprintf(stderr, "looked in:\n%s", tried);
-            fprintf(stderr,
-                "\nThe pak must sit in a directory named id1 -- the engine\n"
-                "locates the rest of the game relative to it.\n"
-                "Put it at ./id1/pak0.pak, or ~/.local/share/omaquake/id1/,\n"
-                "or pass a path, or set OMAQUAKE_PAK.\n"
-                "The shareware data is freely redistributable: see README.md\n");
+        if (resolve_pak(game, pak, sizeof(pak)))
             return 2;
-        }
         game = pak;
     }
 

@@ -77,7 +77,7 @@ Set inline on the widget's entry in `~/.config/omarchy/shell.json`:
 | `gap` | `6` | Space between bar and popout |
 | `binary` | `omaquake` | Path to the binary |
 | `gameDir` | *(none)* | Working directory holding `id1/` |
-| `pak` | *(none)* | Path to `pak0.pak`; omit for the test pattern |
+| `pak` | *(none)* | Path to `pak0.pak`; omit to let omaquake search its usual places, falling back to the test pattern if nothing is found |
 
 Sizing is in **cells** deliberately: fixing cells rather than pixels keeps
 Quake framed identically across monitors of different scale.

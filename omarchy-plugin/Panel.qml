@@ -171,7 +171,16 @@ Panel {
 
     Process {
         id: binaryProbe
-        onExited: function (code) { root.binaryMissing = code !== 0 }
+        onExited: function (code) {
+            root.binaryMissing = code !== 0
+            // Chain the data probe off a binary that was just confirmed to
+            // exist. Quickshell answers a Process whose command cannot be
+            // found with a log line and NO exited signal, so probing through a
+            // missing engine would leave pakFound stuck at its previous value
+            // rather than being corrected. This also covers "the engine got
+            // installed since the last click".
+            if (code === 0) root.probePak()
+        }
     }
 
     // The command is assigned here rather than bound to root.binary: a binding
@@ -214,6 +223,49 @@ Panel {
         root.toggle()
     }
 
+    // --- the game data --------------------------------------------------
+    // An empty `pak` setting does not mean there is nothing to play. omaquake
+    // searches ./id1, ~/.local/share/omaquake and /usr/share/omaquake (where
+    // the omaquake-shareware-data package drops pak0.pak) among others, so
+    // only the binary knows whether a game exists -- `--find-pak` asks it, and
+    // answers with exit 0 when it found data.
+    property bool pakFound: false
+
+    Process {
+        id: pakProbe
+        // Any non-zero status means "no data I can prove is there", which
+        // deliberately also covers an engine older than --find-pak: it answers
+        // an unknown flag with usage and exit 2, and the widget then falls back
+        // to --demo exactly as it always did.
+        onExited: function (code) { root.pakFound = code === 0 }
+    }
+
+    // Assigned in a function rather than bound, for the same reason as
+    // probeBinary(): a binding and the change handlers below would both react
+    // to one change, in an order QML does not promise, so the probe could run
+    // against the PREVIOUS binary or directory and file a verdict about it.
+    //
+    // The search starts at the process's working directory -- ./id1 is the
+    // first place omaquake looks -- so the probe must run from the directory
+    // the terminal will be started in (foot gets `-D gameDir`), or it would
+    // answer for a directory the game never sees. Empty means "inherit
+    // quickshell's cwd", which is what foot does without -D.
+    function probePak() {
+        // With `pak` set there is nothing to discover: gameArgs passes the
+        // configured path straight through, and nothing reads pakFound.
+        if (root.pak !== "" || root.binaryMissing) return
+        pakProbe.workingDirectory = root.gameDir
+        pakProbe.command = [root.binary, "--find-pak", "--no-sound"]
+        pakProbe.running = true
+    }
+
+    // Both settings are user-editable at runtime and either can turn "no data"
+    // into "data" without the binary itself changing. A change to `binary`
+    // re-probes through binaryProbe.onExited instead, which is the only moment
+    // the new path is known to be runnable.
+    onPakChanged: probePak()
+    onGameDirChanged: probePak()
+
     // --- terminal lifecycle --------------------------------------------
     // Spawned through Hyprland's exec-with-rules: 0.56 gained a Lua dispatcher
     // API, and classic per-window dispatchers (`dispatch movewindowpixel exact
@@ -235,12 +287,18 @@ Panel {
 
     // --no-mouse matters: omaquake's evdev pointer path takes EVIOCGRAB, which
     // would steal the pointer from the whole desktop while the popout is open.
-    // With no pak configured fall back to the test pattern -- omaquake exits on
-    // usage if given neither game data nor --demo.
+    //
+    // A configured `pak` wins. Otherwise the binary is left to find the data on
+    // its own (see probePak), and --demo is the last resort for the one case
+    // that is genuinely unplayable: engine present, data nowhere. So a fresh
+    // install of omaquake plus omaquake-shareware-data shows Quake with zero
+    // configuration, and only a machine without a pak gets the test pattern --
+    // which is still needed, because omaquake exits on usage if handed neither
+    // game data nor --demo.
     readonly property var gameArgs: {
         var a = ["--no-sound", "--no-mouse"]
         if (root.pak !== "") a.push(root.pak)
-        else a.push("--demo")
+        else if (!root.pakFound) a.push("--demo")
         return a
     }
 

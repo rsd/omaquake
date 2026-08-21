@@ -104,6 +104,8 @@ Options, as reported by `--help`:
     --symbols=SET    ascii | block | fine        (default: fine)
     --color=DEPTH    mono | 16 | 256 | true      (default: true)
     --demo           render a test pattern instead of the game
+    --find-pak       print the pak0.pak a normal run would load, then exit;
+                     exit status 1 and nothing on stdout when none exists
     --keytest        show decoded key events; diagnoses input problems
     --frames=N       stop after N frames (demo/benchmark)
     --cell=WxH       character cell pixel size (default 10x20)
